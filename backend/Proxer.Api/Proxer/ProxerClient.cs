@@ -22,11 +22,12 @@ public partial class ProxerClient
     private static readonly TimeSpan CaptchaCooldown = TimeSpan.FromMinutes(2);
     private string _captchaPage = "https://proxer.me/login";
 
-    /// <summary>Names the page that showed the captcha, because Proxer only asks for it on some kinds of pages.</summary>
+    /// <summary>The page that last answered with Proxer's captcha; the person solves it there in a browser window.</summary>
+    public string CaptchaPage => _captchaPage;
+
     private string CaptchaMessage =>
-        "Proxer verlangt gerade ein Captcha, meist nach vielen Seitenaufrufen in kurzer Zeit. Öffne " + _captchaPage
-        + " in einem Browser auf dem Rechner, auf dem das Backend läuft, löse dort das Captcha und versuche es in ein paar Minuten erneut. "
-        + "Details stehen in der README.";
+        "Proxer verlangt gerade ein Captcha, meist nach vielen Seitenaufrufen in kurzer Zeit. Lass dir in der App das Fenster dafür öffnen "
+        + "oder öffne " + _captchaPage + " in einem Browser, der über dieselbe Verbindung wie das Backend geht, und löse es dort.";
     private static readonly TimeSpan SessionCheckInterval = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan MinRefreshAge = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MinLoginInterval = TimeSpan.FromSeconds(10);
@@ -252,6 +253,15 @@ public partial class ProxerClient
             _fetchedAt.TryRemove(key, out _);
         }
     }
+
+    /// <summary>Lets requests through again once the person is solving the captcha.</summary>
+    public void ClearCaptchaPause() => _captchaSeenAt = DateTime.MinValue;
+
+    /// <summary>Drops one cached page, e.g. when it turned out to be a check page instead of content.</summary>
+    public void Forget(string path) => Invalidate(path);
+
+    /// <summary>The session cookies, for handing the session to a browser window the person controls.</summary>
+    public Cookie[] ExportCookies() => _cookies.GetAllCookies().Where(c => !c.Expired).ToArray();
 
     private async Task RequireSessionAsync(CancellationToken ct, bool force = false)
     {

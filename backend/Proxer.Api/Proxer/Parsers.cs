@@ -584,6 +584,38 @@ public static partial class Parsers
     private static bool IsFinished(string? status) =>
         status is not null && (status.StartsWith("Abgeschlossen") || status.StartsWith("Abgebrochen"));
 
+    /// <summary>The reader page of a chapter: page images with their sizes, plus the way to the next chapter.</summary>
+    public static ChapterInfo Chapter(string html, int id, int chapter, string language)
+    {
+        if (html.Contains("challenges.cloudflare.com/turnstile") || html.Contains("Captcha Prüfung"))
+            throw new ProxerException("Proxer möchte vor dem Lesen eine Bot-Prüfung, die du einmal selbst bestehen musst.", 428);
+
+        var json = ExtractJsVar(html, "pages") ?? throw new ProxerException("Dieses Kapitel gibt es nicht oder es ist nicht verfügbar.", 404);
+        var server = Regex.Match(html, @"var serverurl = '(//[a-z0-9.-]+\.proxer\.me/[^']*)'");
+        if (!server.Success) throw new ProxerException("Der Bildserver des Kapitels wurde nicht erkannt.");
+        var baseUrl = "https:" + server.Groups[1].Value;
+
+        using var parsed = JsonDocument.Parse(json);
+        var pages = parsed.RootElement.EnumerateArray().Select(page =>
+        {
+            var values = page.EnumerateArray().ToArray();
+            var name = values.ElementAtOrDefault(0).ValueKind == JsonValueKind.String ? values[0].GetString() ?? "" : "";
+            if (name.Length == 0 || name.Contains('/') || name.Contains("..")) return null;
+            int Size(int index) => values.Length > index && values[index].TryGetInt32(out var n) ? n : 0;
+            return new ChapterPage(baseUrl + Uri.EscapeDataString(name), Size(1), Size(2));
+        }).OfType<ChapterPage>().ToArray();
+
+        var doc = Html.ParseDocument(html);
+        var crumbs = doc.QuerySelectorAll("#breadcrumb a").Select(a => Clean(a.TextContent)).ToArray();
+        var chapterTitle = crumbs.ElementAtOrDefault(1) ?? "";
+        var count = Regex.Match(chapterTitle, @"\((\d+)/(\d+)\)$");
+        var next = Regex.Match(html, @"var nextChapter = ""/chapter/\d+/(\d+)/");
+        return new ChapterInfo(id, crumbs.ElementAtOrDefault(0) ?? "", chapter, language,
+            count.Success ? chapterTitle[..count.Index].Trim() : chapterTitle,
+            count.Success ? int.Parse(count.Groups[2].Value) : null,
+            next.Success ? int.Parse(next.Groups[1].Value) : null, pages);
+    }
+
     /// <summary>Returns the JSON literal assigned to <c>var name = ...</c> inside an inline script.</summary>
     public static string? ExtractJsVar(string html, string name)
     {

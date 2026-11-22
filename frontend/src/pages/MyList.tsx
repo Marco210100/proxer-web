@@ -114,9 +114,7 @@ function Bookmarks({ category }: { category: Category }) {
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {items.map((bookmark) => {
         const unit = category === 'anime' ? 'Episode' : 'Kapitel'
-        // Anime bookmarks play in the app; manga chapters still open on Proxer.
-        const watchPath = category === 'anime' ? `/watch/${bookmark.entryId}/${bookmark.episode}/${bookmark.language}` : null
-        const chapterUrl = `https://proxer.me/chapter/${bookmark.entryId}/${bookmark.episode}/${bookmark.language}`
+        const target = `/${category === 'anime' ? 'watch' : 'lesen'}/${bookmark.entryId}/${bookmark.episode}/${bookmark.language}`
         const label = `${bookmark.available ? '▶' : '○'} ${unit} ${bookmark.episode} · ${languageLabel(bookmark.language)}`
         const linkClass = `inline-block rounded-full px-3 py-1 text-xs font-medium ${
           bookmark.available ? 'bg-accent-soft text-accent hover:bg-accent hover:text-white' : 'border border-line text-muted'
@@ -131,15 +129,9 @@ function Bookmarks({ category }: { category: Category }) {
                 {bookmark.title}
               </Link>
               <div className="flex items-center gap-2">
-                {watchPath ? (
-                  <Link to={watchPath} className={linkClass} title={bookmark.available ? undefined : 'Noch nicht verfügbar'}>
-                    {label}
-                  </Link>
-                ) : (
-                  <a href={chapterUrl} target="_blank" rel="noreferrer" className={linkClass}>
-                    {label} ↗
-                  </a>
-                )}
+                <Link to={target} className={linkClass} title={bookmark.available ? undefined : 'Noch nicht verfügbar'}>
+                  {label}
+                </Link>
                 <button
                   type="button"
                   className={`${iconButton} ml-auto`}

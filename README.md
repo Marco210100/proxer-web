@@ -22,9 +22,10 @@ auf dem eigenen Rechner, nicht als öffentlich betriebener Dienst.
 - Seiten und Übersichten zu Charakteren, Personen, Unternehmen und Sub-/Scanlationgruppen
 - Suche mit Filtern für Typ, Sprache, Status, Sortierung und Genres (ein- und ausschließen)
 
-Manga-Kapitel öffnen auf proxer.me: Proxer schützt die Kapitelseiten mit einer Bot-Prüfung, die es pro
-Browser-Sitzung abnimmt. Die App hat ihre eigene Sitzung, kann die Prüfung nicht bestehen und umgeht sie
-bewusst nicht.
+Manga-Kapitel liest die App im eigenen Reader. Vor dem ersten Kapitel verlangt Proxer eine Bot-Prüfung pro
+Sitzung: Die App öffnet dafür ein Browserfenster mit ihrer eigenen Sitzung, in dem man die Prüfung selbst
+besteht. Dafür braucht es ein installiertes Chrome, Chromium oder Edge; ein anderer Pfad lässt sich über die
+Umgebungsvariable `PROXER_BROWSER` angeben.
 
 ## Aufbau
 
@@ -56,15 +57,14 @@ Voraussetzungen: .NET 10 SDK und Node.js 24.
 
 ## Wenn Proxer ein Captcha verlangt
 
-Nach vielen Anmeldungen oder Seitenaufrufen in kurzer Zeit zeigt Proxer statt der Seite ein Captcha. Die App
-kann und soll es nicht lösen. Sie erkennt die Captcha-Seite, pausiert ihre Anfragen für zwei Minuten und
-nennt in der Fehlermeldung die Adresse, bei der das Captcha erschienen ist. Die Sperre hängt an der
-Internetadresse, über die das Backend Proxer erreicht:
+Nach vielen Anmeldungen oder Seitenaufrufen in kurzer Zeit, etwa beim schnellen Durchblättern vieler
+Kapitel, zeigt Proxer statt der Seite ein Captcha. Die App löst es nicht selbst. Sie erkennt die Captcha-Seite,
+pausiert ihre Anfragen für zwei Minuten und zeigt den Knopf „Fenster öffnen“: Er öffnet die betroffene Seite in
+einem Browserfenster mit der Sitzung der App. Dort das Captcha lösen, das Fenster schließen und die Seite in
+der App neu laden.
 
-1. Die in der Fehlermeldung genannte Adresse in einem Browser öffnen, der über dieselbe Verbindung wie das
-   Backend geht. Proxer zeigt das Captcha nur auf manchen Seiten, deshalb genau diese Adresse nehmen.
-2. Das Captcha lösen und auf „Weiter“ klicken. Eine Anmeldung dort ist nicht nötig.
-3. In der App nach ein paar Minuten weitermachen.
+Ohne den Knopf geht es auch von Hand: Die in der Fehlermeldung genannte Adresse in einem Browser öffnen, der
+über dieselbe Verbindung wie das Backend geht, und das Captcha dort lösen.
 
 Läuft das Backend in WSL, nutzt es oft eine andere Adresse (nur IPv4) als der Windows-Browser (IPv6), der
 dann gar kein Captcha sieht. In dem Fall den Browser aus WSL heraus starten oder das Backend direkt unter

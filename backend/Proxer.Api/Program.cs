@@ -8,6 +8,7 @@ var root = FindRepoRoot();
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton(new ProxerOptions(Path.Combine(root, ".proxer-session.json")));
 builder.Services.AddSingleton<ProxerClient>();
+builder.Services.AddSingleton<BrowserVerifier>();
 
 var app = builder.Build();
 
@@ -158,6 +159,38 @@ api.MapGet("/watch/{id:int}/{episode:int}/{language}", async (ProxerClient proxe
     if (!Slug(language)) return Results.BadRequest(new { error = "Ungültige Sprache." });
     var html = await proxer.GetPageAsync($"/watch/{id}/{episode}/{language}?format=raw", Minutes(2), ct);
     return Results.Ok(Parsers.Watch(html, id, episode, language));
+});
+
+// Chapters are kept for an hour, so going back and forth does not ask Proxer again. A check page is never kept.
+api.MapGet("/chapters/{id:int}/{chapter:int}/{language}", async (ProxerClient proxer, CancellationToken ct, int id, int chapter, string language) =>
+{
+    if (!Slug(language) || chapter < 1) return Results.BadRequest(new { error = "Ungültiges Kapitel." });
+    var path = $"/read/{id}/{chapter}/{language}/1";
+    try
+    {
+        return Results.Ok(Parsers.Chapter(await proxer.GetPageAsync(path, Minutes(60), ct), id, chapter, language));
+    }
+    catch (ProxerException)
+    {
+        proxer.Forget(path);
+        throw;
+    }
+});
+
+// Opens a browser window with the app's session on the page that showed Proxer's captcha, where the person solves it.
+api.MapPost("/captcha/open", async (ProxerClient proxer, BrowserVerifier verifier, CancellationToken ct, EmptyRequest _) =>
+{
+    await verifier.OpenAsync(proxer.CaptchaPage, ct);
+    proxer.ClearCaptchaPause();
+    return new ActionResult(true, "Browserfenster geöffnet.");
+});
+
+// Opens a browser window with the app's session on the chapter, where the person passes Proxer's check themselves.
+api.MapPost("/chapters/check", async (BrowserVerifier verifier, CancellationToken ct, ChapterCheckRequest request) =>
+{
+    if (!Slug(request.Language) || request.Chapter < 1 || request.EntryId < 1) return Results.BadRequest(new { error = "Ungültiges Kapitel." });
+    await verifier.OpenAsync($"https://proxer.me/chapter/{request.EntryId}/{request.Chapter}/{request.Language}", ct);
+    return Results.Ok(new ActionResult(true, "Browserfenster geöffnet."));
 });
 
 api.MapGet("/me/progress", async (ProxerClient proxer, CancellationToken ct) =>
@@ -325,6 +358,8 @@ record EpisodeRequest(int Value);
 record StateRequest(int State);
 
 record EmptyRequest;
+
+record ChapterCheckRequest(int EntryId, int Chapter, string Language);
 
 record SendMessageRequest(string Text);
 

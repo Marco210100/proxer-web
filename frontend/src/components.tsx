@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import type { EntrySummary } from './api'
+import { ApiError, useOpenCaptcha, type EntrySummary } from './api'
 
 export function Loading({ label = 'Lädt…' }: { label?: string }) {
   return (
@@ -12,9 +12,40 @@ export function Loading({ label = 'Lädt…' }: { label?: string }) {
 }
 
 export function ErrorNote({ error }: { error: unknown }) {
+  const captcha = error instanceof ApiError && error.status === 403 && error.message.includes('Captcha')
   return (
     <div className="rounded-xl border border-accent/40 bg-accent-soft px-4 py-3 text-sm">
-      {error instanceof Error ? error.message : 'Etwas ist schiefgelaufen.'}
+      {captcha ? <CaptchaHelp /> : error instanceof Error ? error.message : 'Etwas ist schiefgelaufen.'}
+    </div>
+  )
+}
+
+/** Proxer's captcha: the person solves it in a window that uses the app's session, then reloads. */
+function CaptchaHelp() {
+  const open = useOpenCaptcha()
+  return (
+    <div className="space-y-2">
+      <p className="font-medium">Proxer verlangt gerade ein Captcha, meist nach vielen Seitenaufrufen in kurzer Zeit.</p>
+      <p className="text-muted">Öffne das Fenster, löse dort das Captcha, schließe es und lade diese Seite neu.</p>
+      <div className="flex flex-wrap gap-2 pt-1">
+        <button
+          type="button"
+          disabled={open.isPending}
+          onClick={() => open.mutate()}
+          className="rounded-full border border-line bg-surface px-3 py-1 text-sm enabled:hover:border-accent enabled:hover:text-accent disabled:opacity-50"
+        >
+          {open.isPending ? 'Öffnet…' : 'Fenster öffnen'}
+        </button>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="rounded-full border border-line bg-surface px-3 py-1 text-sm hover:border-accent hover:text-accent"
+        >
+          Neu laden
+        </button>
+      </div>
+      {open.isSuccess && <p className="text-good">Das Fenster ist offen. Es kann einen Moment dauern, bis es erscheint.</p>}
+      {open.error && <p>{open.error instanceof Error ? open.error.message : 'Das Fenster ließ sich nicht öffnen.'}</p>}
     </div>
   )
 }

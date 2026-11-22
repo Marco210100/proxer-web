@@ -127,3 +127,8 @@ public record ArticleSection(string Title, ArticleItem[] Items);
 public record SearchGenre(int Id, string Name, string? Description);
 
 public record OverviewItem(int Id, string Name, string? Image, string[] Works);
+
+public record ChapterPage(string Url, int Width, int Height);
+
+public record ChapterInfo(int EntryId, string EntryTitle, int Chapter, string Language, string Title, int? ChapterCount,
+    int? NextChapter, ChapterPage[] Pages);

@@ -63,6 +63,9 @@ export interface SearchGenre { id: number; name: string; description: string | n
 export interface OverviewItem { id: number; name: string; image: string | null; works: string[] }
 export interface SearchFilters { q: string; type: string; language: string; status: string; sort: string; genres: number[]; excludeGenres: number[] }
 
+export interface ChapterPage { url: string; width: number; height: number }
+export interface ChapterInfo { entryId: number; entryTitle: string; chapter: number; language: string; title: string; chapterCount: number | null; nextChapter: number | null; pages: ChapterPage[] }
+
 export type Category = 'anime' | 'manga' | 'novel'
 
 export class ApiError extends Error {
@@ -276,6 +279,22 @@ export const useInfoPage = (kind: string, id: number) =>
 
 export const useUpdates = (category: 'anime' | 'manga') =>
   useQuery({ queryKey: ['updates', category], queryFn: () => get<UpdateItem[]>(`/updates/${category}`), staleTime: minutes(5) })
+
+export const useChapter = (id: number, chapter: number, language: string) =>
+  useQuery({
+    queryKey: ['chapter', id, chapter, language],
+    queryFn: () => get<ChapterInfo>(`/chapters/${id}/${chapter}/${language}`),
+    staleTime: minutes(60),
+    retry: false,
+  })
+
+/** Opens a browser window with the app's session, where the person passes Proxer's bot check for chapters. */
+export const useChapterCheck = () =>
+  useMutation({
+    mutationFn: (request: { entryId: number; chapter: number; language: string }) => post<ActionResult>('/chapters/check', request),
+  })
+
+export const useOpenCaptcha = () => useMutation({ mutationFn: () => post<ActionResult>('/captcha/open', {}) })
 
 export const useBookmarks = () =>
   useQuery({ queryKey: ['bookmarks'], queryFn: () => get<Bookmark[]>('/me/bookmarks'), staleTime: minutes(2) })

@@ -16,6 +16,7 @@ import { ConversationView, Conversations, Notifications, Profile } from './pages
 import { ForumCategoryView, ForumIndex, ForumThreadView } from './pages/Forum'
 import InfoPageView from './pages/InfoPage'
 import Overview from './pages/Overview'
+import Reader from './pages/Reader'
 
 const navItems = [
   { to: '/', label: 'Start' },
@@ -149,6 +150,7 @@ export default function App() {
           <Route path="/liste" element={<MyList />} />
           <Route path="/eintrag/:id" element={<Entry />} />
           <Route path="/watch/:id/:episode/:language" element={<Watch />} />
+          <Route path="/lesen/:id/:chapter/:language" element={<Reader />} />
           <Route path="*" element={<p className="text-muted">Diese Seite gibt es nicht.</p>} />
         </Routes>
       </main>
