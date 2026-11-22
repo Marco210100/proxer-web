@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 
 // Mirrors backend/Proxer.Api/Proxer/Models.cs
 export interface SessionInfo { loggedIn: boolean; username: string | null }
@@ -22,19 +22,59 @@ export interface MyListItem { id: number; name: string; medium: string; episodes
 
 export type Category = 'anime' | 'manga'
 
-async function get<T>(path: string): Promise<T> {
-  const response = await fetch(`/api${path}`)
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, init)
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    throw new Error(body?.error ?? `Fehler ${response.status}`)
+    throw new ApiError(body?.error ?? `Fehler ${response.status}`, response.status)
   }
   return response.json()
 }
+
+const get = <T,>(path: string) => request<T>(path)
+
+const post = <T,>(path: string, body: unknown) =>
+  request<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
 
 const minutes = (n: number) => n * 60_000
 
 export const useSession = () =>
   useQuery({ queryKey: ['session'], queryFn: () => get<SessionInfo>('/session'), staleTime: minutes(10) })
+
+export interface Credentials { username: string; password: string; secretKey: string | null }
+
+/**
+ * Switches the app to the new session state and drops everything cached for the previous account.
+ * The session query itself must stay in the cache: removing it would detach the mounted app from it.
+ */
+function applySession(client: QueryClient, session: SessionInfo) {
+  client.setQueryData(['session'], session)
+  client.removeQueries({ predicate: (query) => query.queryKey[0] !== 'session' })
+}
+
+export function useLogin() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (credentials: Credentials) => post<SessionInfo>('/session/login', credentials),
+    onSuccess: (session) => applySession(client, session),
+  })
+}
+
+export function useLogout() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: () => post<SessionInfo>('/session/logout', {}),
+    onSuccess: (session) => applySession(client, session),
+  })
+}
 
 export const useNews = () =>
   useQuery({ queryKey: ['news'], queryFn: () => get<NewsItem[]>('/news'), staleTime: minutes(5) })

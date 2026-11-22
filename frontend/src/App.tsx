@@ -1,6 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { NavLink, Route, Routes, useNavigate } from 'react-router-dom'
-import { useSession } from './api'
+import { useLogout, useSession } from './api'
+import { ErrorNote, Loading } from './components'
+import Login from './pages/Login'
 import Home from './pages/Home'
 import Browse from './pages/Browse'
 import Search from './pages/Search'
@@ -22,6 +24,7 @@ const navItems = [
 function Header() {
   const navigate = useNavigate()
   const session = useSession()
+  const logout = useLogout()
   const [query, setQuery] = useState('')
 
   const submit = (event: FormEvent) => {
@@ -58,15 +61,37 @@ function Header() {
             className="w-full rounded-full border border-line bg-surface px-4 py-1.5 text-sm outline-none placeholder:text-muted focus:border-accent sm:w-64"
           />
         </form>
-        <span className="hidden text-sm text-muted md:block">
-          {session.isLoading ? '…' : session.data?.loggedIn ? session.data.username : 'nicht eingeloggt'}
-        </span>
+        <span className="hidden text-sm text-muted md:block">{session.data?.username}</span>
+        <button
+          type="button"
+          onClick={() => logout.mutate()}
+          disabled={logout.isPending}
+          className="rounded-full border border-line px-3 py-1.5 text-sm text-muted enabled:hover:border-accent enabled:hover:text-accent disabled:opacity-50"
+        >
+          {logout.isPending ? 'Abmelden…' : 'Abmelden'}
+        </button>
       </div>
     </header>
   )
 }
 
 export default function App() {
+  const session = useSession()
+
+  if (session.isLoading)
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loading label="Sitzung wird geprüft…" />
+      </div>
+    )
+  if (session.error)
+    return (
+      <div className="mx-auto max-w-md px-4 py-20">
+        <ErrorNote error={session.error} />
+      </div>
+    )
+  if (!session.data?.loggedIn) return <Login />
+
   return (
     <div className="min-h-screen">
       <Header />

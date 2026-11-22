@@ -4,12 +4,9 @@ using Proxer.Api.Proxer;
 var builder = WebApplication.CreateBuilder(args);
 
 var root = FindRepoRoot();
-var env = ReadEnvFile(Path.Combine(root, ".env.local"));
-if (!env.TryGetValue("PROXER_USER", out var user) || !env.TryGetValue("PROXER_PASS", out var pass) || user == "" || pass == "")
-    throw new InvalidOperationException($"PROXER_USER und PROXER_PASS fehlen in {Path.Combine(root, ".env.local")}");
 
 builder.Services.AddMemoryCache();
-builder.Services.AddSingleton(new ProxerOptions(user, pass, Path.Combine(root, ".proxer-session.json")));
+builder.Services.AddSingleton(new ProxerOptions(Path.Combine(root, ".proxer-session.json")));
 builder.Services.AddSingleton<ProxerClient>();
 
 var app = builder.Build();
@@ -33,6 +30,20 @@ TimeSpan Minutes(double m) => TimeSpan.FromMinutes(m);
 bool Slug(string s) => Regex.IsMatch(s, "^[a-z0-9-]{1,30}$");
 
 api.MapGet("/session", (ProxerClient proxer, CancellationToken ct) => proxer.GetSessionAsync(ct));
+
+// Both take a JSON body, so plain cross-site form posts from other pages cannot trigger them.
+api.MapPost("/session/login", async (ProxerClient proxer, CancellationToken ct, LoginRequest request) =>
+{
+    if (string.IsNullOrWhiteSpace(request.Username) || string.IsNullOrEmpty(request.Password))
+        return Results.BadRequest(new { error = "Benutzername und Passwort fehlen." });
+    return Results.Ok(await proxer.LoginAsync(request.Username.Trim(), request.Password, request.SecretKey, ct));
+});
+
+api.MapPost("/session/logout", async (ProxerClient proxer, CancellationToken ct, LogoutRequest _) =>
+{
+    await proxer.LogoutAsync(ct);
+    return Results.Ok(new SessionInfo(false, null));
+});
 
 api.MapGet("/news", async (ProxerClient proxer, CancellationToken ct) =>
     Parsers.News(await proxer.GetPageAsync("/?format=raw", Minutes(5), ct)));
@@ -111,22 +122,10 @@ app.Run();
 static string FindRepoRoot()
 {
     for (var dir = new DirectoryInfo(Directory.GetCurrentDirectory()); dir is not null; dir = dir.Parent)
-        if (File.Exists(Path.Combine(dir.FullName, ".env.local"))) return dir.FullName;
+        if (Directory.Exists(Path.Combine(dir.FullName, ".git"))) return dir.FullName;
     return Directory.GetCurrentDirectory();
 }
 
-static Dictionary<string, string> ReadEnvFile(string path)
-{
-    var values = new Dictionary<string, string>();
-    if (!File.Exists(path)) return values;
-    foreach (var raw in File.ReadAllLines(path))
-    {
-        var line = raw.Trim();
-        var split = line.IndexOf('=');
-        if (split <= 0 || line.StartsWith('#')) continue;
-        var value = line[(split + 1)..].Trim();
-        if (value.Length >= 2 && (value[0] == '\'' || value[0] == '"') && value[^1] == value[0]) value = value[1..^1];
-        values[line[..split].Trim()] = value;
-    }
-    return values;
-}
+record LoginRequest(string Username, string Password, string? SecretKey);
+
+record LogoutRequest;
