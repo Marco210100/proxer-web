@@ -79,12 +79,51 @@ api.MapGet("/season", async (ProxerClient proxer, CancellationToken ct, int? yea
 api.MapGet("/calendar", async (ProxerClient proxer, CancellationToken ct) =>
     Parsers.Calendar(await proxer.GetPageAsync("/calendar?format=raw", Minutes(10), ct)));
 
-api.MapGet("/search", async (ProxerClient proxer, CancellationToken ct, string q) =>
+// Extended search. Genre ids come from /search/genres; several are joined with "+", as Proxer's own form does.
+api.MapGet("/search", async (ProxerClient proxer, CancellationToken ct, string? q, string type = "all", string language = "alle",
+    string status = "all", string sort = "relevance", string? genres = null, string? excludeGenres = null) =>
 {
-    if (string.IsNullOrWhiteSpace(q)) return Results.Ok(new EntryPage([], 1, false));
-    var html = await proxer.GetPageAsync($"/search?s=search&name={Uri.EscapeDataString(q.Trim())}&format=raw", Minutes(10), ct);
-    return Results.Ok(Parsers.EntryList(html, 1));
+    bool Ids(string? value) => string.IsNullOrEmpty(value) || Regex.IsMatch(value, @"^\d+(,\d+){0,40}$");
+    if (!Regex.IsMatch(type, "^[a-z0-9-]{1,20}$") || language is not ("alle" or "de" or "en")
+        || status is not ("all" or "0" or "1" or "2" or "3")
+        || sort is not ("relevance" or "name" or "rating" or "clicks" or "count") || !Ids(genres) || !Ids(excludeGenres))
+        return Results.BadRequest(new { error = "Ungültige Suchfilter." });
+
+    var name = (q ?? "").Trim();
+    var filtered = type != "all" || language != "alle" || status != "all" || !string.IsNullOrEmpty(genres) || !string.IsNullOrEmpty(excludeGenres);
+    if (name.Length < 2 && !filtered) return Results.Ok(new EntryPage([], 1, false));
+
+    string Joined(string? ids) => string.IsNullOrEmpty(ids) ? "" : ids.Replace(",", "%2B");
+    var path = $"/search?s=search&name={Uri.EscapeDataString(name)}&sprache={language}&typ={type}&status={status}"
+        + $"&taggenre={Joined(genres)}&notaggenre={Joined(excludeGenres)}&sort={sort}&format=raw";
+    return Results.Ok(Parsers.EntryList(await proxer.GetPageAsync(path, Minutes(10), ct), 1));
 });
+
+api.MapGet("/search/genres", async (ProxerClient proxer, CancellationToken ct) =>
+    MoreParsers.SearchGenres(await proxer.GetPageAsync("/search?format=raw", Minutes(1440), ct)));
+
+api.MapGet("/overview/{kind}", async (ProxerClient proxer, CancellationToken ct, string kind, string? letter) =>
+{
+    if (kind is not ("character" or "persons" or "industry" or "translatorgroups") || (letter is not null && !Regex.IsMatch(letter, "^(0-9|[A-Z])$")))
+        return Results.BadRequest(new { error = "Ungültige Auswahl." });
+    var path = letter is null ? $"/{kind}?format=raw" : $"/{kind}?char={letter}&format=raw";
+    return Results.Ok(MoreParsers.Overview(await proxer.GetPageAsync(path, Minutes(120), ct), kind));
+});
+
+api.MapGet("/entries/{id:int}/updates", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    MoreParsers.EntryUpdates(await proxer.GetPageAsync($"/info/{id}/updates?format=raw", Minutes(10), ct)));
+
+api.MapGet("/entries/{id:int}/discussions", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    MoreParsers.EntryDiscussions(await proxer.GetPageAsync($"/info/{id}/forum?format=raw", Minutes(15), ct)));
+
+api.MapGet("/entries/{id:int}/gallery", async (ProxerClient proxer, CancellationToken ct, int id, int page = 1) =>
+    MoreParsers.Gallery(await proxer.GetPageAsync($"/info/{id}/gallery/{Math.Max(page, 1)}?format=raw", Minutes(60), ct), Math.Max(page, 1)));
+
+api.MapGet("/entries/{id:int}/history", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    MoreParsers.EntryHistory(await proxer.GetPageAsync($"/info/{id}/history?format=raw", Minutes(2), ct)));
+
+api.MapGet("/entries/{id:int}/articles", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    MoreParsers.EntryArticles(await proxer.GetPageAsync($"/info/{id}/article?format=raw", Minutes(120), ct)));
 
 api.MapGet("/entries/{id:int}", async (ProxerClient proxer, CancellationToken ct, int id, bool refresh = false) =>
     Parsers.Details(await proxer.GetPageAsync($"/info/{id}/details?format=raw", Minutes(60), ct, refresh), id));

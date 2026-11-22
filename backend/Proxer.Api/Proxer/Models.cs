@@ -109,3 +109,21 @@ public record InfoPage(string Kind, int Id, string Title, string? Image, Fact[] 
 public record FactLink(string Kind, int Id, string Name, string Role);
 
 public record UpdateItem(int EntryId, string Title, string Language, string Medium, string Uploader, string Date, string Cover);
+
+public record EpisodeUpdate(string Uploader, int? UploaderId, string Title, string Language, string Date, int? Episode, string? LanguageCode);
+
+public record Discussion(int CategoryId, int TopicId, string Title, int Replies, string Views, string Author, string Category, string LastPost);
+
+public record GalleryImage(string Id, string Title, string Image);
+
+public record GalleryPage(GalleryImage[] Images, int Page, bool HasNext);
+
+public record HistoryItem(string Episode, string Language, string Date, int? EpisodeNumber, string? LanguageCode);
+
+public record ArticleItem(string Id, string Title, string? Image);
+
+public record ArticleSection(string Title, ArticleItem[] Items);
+
+public record SearchGenre(int Id, string Name, string? Description);
+
+public record OverviewItem(int Id, string Name, string? Image, string[] Works);

@@ -18,7 +18,15 @@ public record ProxerOptions(string SessionFile);
 public partial class ProxerClient
 {
     private const string BaseUrl = "https://proxer.me";
-    private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(600);
+    private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(1200);
+    private static readonly TimeSpan CaptchaCooldown = TimeSpan.FromMinutes(2);
+    private string _captchaPage = "https://proxer.me/login";
+
+    /// <summary>Names the page that showed the captcha, because Proxer only asks for it on some kinds of pages.</summary>
+    private string CaptchaMessage =>
+        "Proxer verlangt gerade ein Captcha, meist nach vielen Seitenaufrufen in kurzer Zeit. Öffne " + _captchaPage
+        + " in einem Browser auf dem Rechner, auf dem das Backend läuft, löse dort das Captcha und versuche es in ein paar Minuten erneut. "
+        + "Details stehen in der README.";
     private static readonly TimeSpan SessionCheckInterval = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan MinRefreshAge = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MinLoginInterval = TimeSpan.FromSeconds(10);
@@ -34,6 +42,7 @@ public partial class ProxerClient
     private DateTime _lastRequest = DateTime.MinValue;
     private DateTime _sessionCheckedAt = DateTime.MinValue;
     private DateTime _lastLoginAttempt = DateTime.MinValue;
+    private DateTime _captchaSeenAt = DateTime.MinValue;
     private string? _username;
     private string? _token;
     private int? _userId;
@@ -299,6 +308,9 @@ public partial class ProxerClient
         await _gate.WaitAsync(ct);
         try
         {
+            // After a captcha page every further request would only make things worse; pause for a while.
+            if (DateTime.UtcNow - _captchaSeenAt < CaptchaCooldown) throw new ProxerException(CaptchaMessage, 403);
+
             var wait = MinInterval - (DateTime.UtcNow - _lastRequest);
             if (wait > TimeSpan.Zero) await Task.Delay(wait, ct);
 
@@ -313,6 +325,15 @@ public partial class ProxerClient
             if ((int)response.StatusCode >= 500 || response.StatusCode == HttpStatusCode.TooManyRequests || response.StatusCode == HttpStatusCode.Forbidden)
                 throw new ProxerException($"Proxer antwortet mit {(int)response.StatusCode}.");
             var body = await response.Content.ReadAsStringAsync(ct);
+
+            // Proxer answers any page with this form once it suspects automated traffic. The login has its own handling.
+            if (method == HttpMethod.Get && !path.StartsWith("/login") && body.Length < 20000 && body.Contains("Captcha Eingabe"))
+            {
+                _captchaSeenAt = DateTime.UtcNow;
+                _captchaPage = BaseUrl + Regex.Replace(path, @"[?&]format=(raw|json).*$", "");
+                _log.LogWarning("Proxer answered {Path} with its captcha page; pausing requests", path.Split('?')[0]);
+                throw new ProxerException(CaptchaMessage, 403);
+            }
             return (body, response.RequestMessage?.RequestUri?.AbsolutePath ?? path);
         }
         catch (HttpRequestException e)

@@ -15,6 +15,7 @@ import Calendar from './pages/Calendar'
 import { ConversationView, Conversations, Notifications, Profile } from './pages/Community'
 import { ForumCategoryView, ForumIndex, ForumThreadView } from './pages/Forum'
 import InfoPageView from './pages/InfoPage'
+import Overview from './pages/Overview'
 
 const navItems = [
   { to: '/', label: 'Start' },
@@ -24,6 +25,7 @@ const navItems = [
   { to: '/season', label: 'Season' },
   { to: '/kalender', label: 'Kalender' },
   { to: '/forum', label: 'Forum' },
+  { to: '/uebersicht/character', label: 'Mehr' },
   { to: '/liste', label: 'Meine Liste' },
 ]
 
@@ -143,6 +145,7 @@ export default function App() {
           <Route path="/forum/:categoryId/:topicId" element={<ForumThreadView />} />
           <Route path="/user/:id" element={<Profile />} />
           <Route path="/seite/:kind/:id" element={<InfoPageView />} />
+          <Route path="/uebersicht/:kind" element={<Overview />} />
           <Route path="/liste" element={<MyList />} />
           <Route path="/eintrag/:id" element={<Entry />} />
           <Route path="/watch/:id/:episode/:language" element={<Watch />} />

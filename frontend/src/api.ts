@@ -52,6 +52,17 @@ export interface InfoPage { kind: PageKind; id: number; title: string; image: st
 export interface FactLink { kind: PageKind; id: number; name: string; role: string }
 export interface UpdateItem { entryId: number; title: string; language: string; medium: string; uploader: string; date: string; cover: string }
 
+export interface EpisodeUpdate { uploader: string; uploaderId: number | null; title: string; language: string; date: string; episode: number | null; languageCode: string | null }
+export interface Discussion { categoryId: number; topicId: number; title: string; replies: number; views: string; author: string; category: string; lastPost: string }
+export interface GalleryImage { id: string; title: string; image: string }
+export interface GalleryPage { images: GalleryImage[]; page: number; hasNext: boolean }
+export interface HistoryItem { episode: string; language: string; date: string; episodeNumber: number | null; languageCode: string | null }
+export interface ArticleItem { id: string; title: string; image: string | null }
+export interface ArticleSection { title: string; items: ArticleItem[] }
+export interface SearchGenre { id: number; name: string; description: string | null }
+export interface OverviewItem { id: number; name: string; image: string | null; works: string[] }
+export interface SearchFilters { q: string; type: string; language: string; status: string; sort: string; genres: number[]; excludeGenres: number[] }
+
 export type Category = 'anime' | 'manga' | 'novel'
 
 export class ApiError extends Error {
@@ -135,13 +146,44 @@ export const useSeason = (year: number | null, season: number | null) =>
 export const useCalendar = () =>
   useQuery({ queryKey: ['calendar'], queryFn: () => get<CalendarDay[]>('/calendar'), staleTime: minutes(10), refetchInterval: minutes(10) })
 
-export const useSearch = (query: string) =>
+/** A search needs at least a two-letter name or one filter, otherwise Proxer would return its whole catalogue. */
+export const isSearchable = (f: SearchFilters) =>
+  f.q.trim().length > 1 || f.type !== 'all' || f.language !== 'alle' || f.status !== 'all' || f.genres.length > 0 || f.excludeGenres.length > 0
+
+export const useSearch = (filters: SearchFilters) =>
   useQuery({
-    queryKey: ['search', query],
-    queryFn: () => get<EntryPage>(`/search?q=${encodeURIComponent(query)}`),
-    enabled: query.trim().length > 1,
+    queryKey: ['search', filters],
+    queryFn: () => {
+      const params = new URLSearchParams({ q: filters.q.trim(), type: filters.type, language: filters.language, status: filters.status, sort: filters.sort })
+      if (filters.genres.length) params.set('genres', filters.genres.join(','))
+      if (filters.excludeGenres.length) params.set('excludeGenres', filters.excludeGenres.join(','))
+      return get<EntryPage>(`/search?${params}`)
+    },
+    enabled: isSearchable(filters),
     staleTime: minutes(10),
+    placeholderData: (previous) => previous,
   })
+
+export const useSearchGenres = () =>
+  useQuery({ queryKey: ['search-genres'], queryFn: () => get<SearchGenre[]>('/search/genres'), staleTime: minutes(1440) })
+
+export const useOverview = (kind: string, letter: string | null) =>
+  useQuery({ queryKey: ['overview', kind, letter], queryFn: () => get<OverviewItem[]>(`/overview/${kind}${letter ? `?letter=${letter}` : ''}`), staleTime: minutes(120) })
+
+export const useEntryUpdates = (id: number) =>
+  useQuery({ queryKey: ['entry-updates', id], queryFn: () => get<EpisodeUpdate[]>(`/entries/${id}/updates`), staleTime: minutes(10) })
+
+export const useDiscussions = (id: number) =>
+  useQuery({ queryKey: ['discussions', id], queryFn: () => get<Discussion[]>(`/entries/${id}/discussions`), staleTime: minutes(15) })
+
+export const useGallery = (id: number, page: number) =>
+  useQuery({ queryKey: ['gallery', id, page], queryFn: () => get<GalleryPage>(`/entries/${id}/gallery?page=${page}`), staleTime: minutes(60), placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === id ? previous : undefined) })
+
+export const useEntryHistory = (id: number) =>
+  useQuery({ queryKey: ['entry-history', id], queryFn: () => get<HistoryItem[]>(`/entries/${id}/history`), staleTime: minutes(2) })
+
+export const useArticles = (id: number) =>
+  useQuery({ queryKey: ['articles', id], queryFn: () => get<ArticleSection[]>(`/entries/${id}/articles`), staleTime: minutes(120) })
 
 export const useEntry = (id: number) =>
   useQuery({ queryKey: ['entry', id], queryFn: () => get<EntryDetails>(`/entries/${id}`), staleTime: minutes(60) })

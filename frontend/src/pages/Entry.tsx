@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Comments, Music, People, Recommendations, Relations } from './EntryTabs'
+import { Articles, Discussions, EntryHistory, EntryUpdates, Gallery } from './EntryTabsMore'
 import { isPlayable, languageLabel, useEntry, useEpisodes, useListAction, useProgress, useRefreshEntry, useSetProgress, useSubscribe } from '../api'
 import { Chip, Cover, ErrorNote, Loading, Rating } from '../components'
 
@@ -13,6 +14,11 @@ const tabLabels = [
   { key: 'recommendations', label: 'Empfehlungen' },
   { key: 'comments', label: 'Kommentare' },
   { key: 'music', label: 'Musik' },
+  { key: 'forum', label: 'Diskussionen' },
+  { key: 'gallery', label: 'Bilder' },
+  { key: 'article', label: 'Artikel' },
+  { key: 'updates', label: 'Updates' },
+  { key: 'history', label: 'Chronik' },
 ]
 
 function Episodes({ id, ongoing, page, setPage }: { id: number; ongoing: boolean; page: number; setPage: (page: number) => void }) {
@@ -254,6 +260,11 @@ export default function Entry() {
         {tab === 'recommendations' && <Recommendations id={data.id} />}
         {tab === 'comments' && <Comments key={data.id} id={data.id} />}
         {tab === 'music' && <Music id={data.id} />}
+        {tab === 'forum' && <Discussions id={data.id} />}
+        {tab === 'gallery' && <Gallery key={data.id} id={data.id} />}
+        {tab === 'article' && <Articles id={data.id} />}
+        {tab === 'updates' && <EntryUpdates id={data.id} />}
+        {tab === 'history' && <EntryHistory id={data.id} />}
       </section>
     </div>
   )
