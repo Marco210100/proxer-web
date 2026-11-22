@@ -10,11 +10,20 @@ auf dem eigenen Rechner, nicht als öffentlich betriebener Dienst.
 
 - Anmelden und Abmelden mit dem eigenen Proxer-Account (auch mit Zwei-Faktor-Code)
 - Startseite mit beliebten Anime und News
-- Anime- und Manga-Listen mit Sortierung, Filtern (Serien, Filme, OVA, Airing) und Anbieter-Katalogen
+- Startseite zusätzlich mit den zuletzt hochgeladenen Episoden
+- Anime-, Manga- und Novel-Listen mit Sortierung, Buchstabenfilter, Medienfiltern und Anbieter-Katalogen
 - Season-Übersicht und Anime-Kalender mit Countdown
-- Detailseiten mit Episodenliste, Videowiedergabe über den eingebetteten Proxer-Player
-- Eigene Liste mit Fortschritt
+- Detailseiten mit Tags, Charakteren, Personen, Unternehmen, Episodenliste, Verbindungen, Empfehlungen,
+  Kommentaren und Musik
+- Videowiedergabe über den eingebetteten Proxer-Player
+- Eigene Liste: Fortschritt und Status ändern, Einträge entfernen, Lesezeichen verwalten
+- Vermerken, Abschließen, Favorisieren, Abonnieren und „als gesehen markieren“ direkt aus der App
+- Forum (lesen), Nachrichten (lesen und antworten), Benachrichtigungen, Profile
+- Seiten zu Charakteren, Personen, Unternehmen und Sub-/Scanlationgruppen
 - Suche
+
+Manga-Kapitel öffnen auf proxer.me: Proxer schützt die Kapitelseiten mit einer Bot-Prüfung, die die App
+bewusst nicht umgeht.
 
 ## Aufbau
 

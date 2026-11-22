@@ -1,14 +1,25 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { isPlayable, languageLabel, useEntry, useEpisodes, useProgress, useRefreshEntry } from '../api'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Comments, Music, People, Recommendations, Relations } from './EntryTabs'
+import { isPlayable, languageLabel, useEntry, useEpisodes, useListAction, useProgress, useRefreshEntry, useSetProgress, useSubscribe } from '../api'
 import { Chip, Cover, ErrorNote, Loading, Rating } from '../components'
 
-const hiddenFacts = new Set(['Original Titel'])
+// Companies and groups are shown as links below the facts instead.
+const hiddenFacts = new Set(['Original Titel', 'Industrie', 'Gruppen'])
+
+const tabLabels = [
+  { key: 'list', label: 'Episoden' },
+  { key: 'relation', label: 'Verbindungen' },
+  { key: 'recommendations', label: 'Empfehlungen' },
+  { key: 'comments', label: 'Kommentare' },
+  { key: 'music', label: 'Musik' },
+]
 
 function Episodes({ id, ongoing, page, setPage }: { id: number; ongoing: boolean; page: number; setPage: (page: number) => void }) {
   const episodes = useEpisodes(id, page, ongoing)
   const progress = useProgress()
   const watched = progress.data?.find((p) => p.entryId === id)?.episode ?? 0
+  const setProgress = useSetProgress(id, episodes.data?.category ?? 'anime')
 
   if (episodes.isLoading) return <Loading label="Episoden laden…" />
   if (episodes.error) return <ErrorNote error={episodes.error} />
@@ -34,11 +45,20 @@ function Episodes({ id, ongoing, page, setPage }: { id: number; ongoing: boolean
             <span className="min-w-0 flex-1 truncate text-sm">
               {episode.title ?? `${isManga ? 'Kapitel' : 'Episode'} ${episode.number}`}
             </span>
-            {episode.number <= watched && (
-              <span className="text-sm text-good" title="Gesehen">
-                ✓
-              </span>
-            )}
+            <button
+              type="button"
+              disabled={setProgress.isPending}
+              // Clicking the last watched episode takes the mark back by one.
+              onClick={() => setProgress.mutate(episode.number === watched ? episode.number - 1 : episode.number)}
+              title={episode.number <= watched ? 'Gesehen – klicken, um den Stand hierher zu setzen' : 'Bis hierher als gesehen markieren'}
+              aria-label={`${isManga ? 'Kapitel' : 'Episode'} ${episode.number} als Stand setzen`}
+              aria-pressed={episode.number <= watched}
+              className={`size-7 rounded-full border text-sm transition-colors disabled:opacity-50 ${
+                episode.number <= watched ? 'border-good/60 text-good' : 'border-line text-line hover:border-good hover:text-good'
+              }`}
+            >
+              ✓
+            </button>
             <span className="flex gap-2">
               {episode.languages.map((language) =>
                 isManga ? (
@@ -77,13 +97,54 @@ function Episodes({ id, ongoing, page, setPage }: { id: number; ongoing: boolean
   )
 }
 
+function ListActions({ id }: { id: number }) {
+  const progress = useProgress()
+  const action = useListAction(id)
+  const subscribe = useSubscribe(id)
+  const mine = progress.data?.find((p) => p.entryId === id)
+  const button =
+    'rounded-full border border-line px-3 py-1.5 text-sm transition-colors enabled:hover:border-accent enabled:hover:text-accent disabled:opacity-50'
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-2">
+      <button type="button" className={button} disabled={action.isPending} onClick={() => action.mutate('note')}>
+        + Vermerken
+      </button>
+      <button type="button" className={button} disabled={action.isPending} onClick={() => action.mutate('finish')}>
+        ✓ Abgeschlossen
+      </button>
+      <button type="button" className={button} disabled={action.isPending} onClick={() => action.mutate('favor')}>
+        ♥ Favorisieren
+      </button>
+      <button
+        type="button"
+        className={`${button} ${mine?.subscribed ? 'border-accent text-accent' : ''}`}
+        disabled={subscribe.isPending}
+        aria-pressed={mine?.subscribed ?? false}
+        onClick={() => subscribe.mutate(!mine?.subscribed)}
+        title="Benachrichtigt dich über neue Staffeln und News zu diesem Werk"
+      >
+        {mine?.subscribed ? '🔔 Abonniert' : '🔔 Abonnieren'}
+      </button>
+      {mine && <span className="text-sm text-muted">Auf deiner Liste: {listStates[mine.state] ?? 'eingetragen'}</span>}
+    </div>
+  )
+}
+
+const listStates = ['Abgeschlossen', 'Am Schauen', 'Geplant', 'Abgebrochen']
+
 export default function Entry() {
   const id = Number(useParams().id)
   const entry = useEntry(id)
+  const [params, setParams] = useSearchParams()
   const [page, setPage] = useState(1)
   const refresh = useRefreshEntry(id, page)
 
   useEffect(() => setPage(1), [id])
+
+  // Only offer the tabs Proxer has for this entry, in a fixed order.
+  const tabs = tabLabels.filter((t) => entry.data?.tabs.includes(t.key))
+  const tab = tabs.find((t) => t.key === params.get('tab'))?.key ?? tabs[0]?.key
 
   if (entry.isLoading) return <Loading />
   if (entry.error) return <ErrorNote error={entry.error} />
@@ -106,6 +167,7 @@ export default function Entry() {
               Auf Proxer öffnen ↗
             </a>
           </div>
+          <ListActions id={data.id} />
           <div className="mt-4 flex flex-wrap gap-2">
             {data.genres.map((genre) => (
               <span key={genre.name} title={genre.description ?? undefined} className="rounded-full bg-raised px-3 py-1 text-xs">
@@ -113,6 +175,15 @@ export default function Entry() {
               </span>
             ))}
           </div>
+          {data.tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {data.tags.map((tag) => (
+                <span key={tag.name} title={tag.description ?? undefined} className="rounded-full border border-line px-3 py-1 text-xs text-muted">
+                  {tag.name}
+                </span>
+              ))}
+            </div>
+          )}
           <p className="mt-5 max-w-3xl whitespace-pre-line leading-relaxed text-ink/90">{data.description}</p>
           <dl className="mt-6 grid gap-x-8 gap-y-3 text-sm sm:grid-cols-2">
             {data.facts
@@ -124,32 +195,66 @@ export default function Entry() {
                 </div>
               ))}
           </dl>
+          {data.links.length > 0 && (
+            <div className="mt-5">
+              <div className="mb-2 text-xs uppercase tracking-wide text-muted">Unternehmen und Gruppen</div>
+              <div className="flex flex-wrap gap-2">
+                {data.links.map((link) => (
+                  <Link
+                    key={`${link.kind}-${link.id}`}
+                    to={`/seite/${link.kind}/${link.id}`}
+                    className="rounded-full border border-line px-3 py-1 text-xs hover:border-accent hover:text-accent"
+                  >
+                    {link.name}
+                    {link.role && <span className="ml-1.5 text-muted">{link.role}</span>}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 
-      {data.tabs.includes('list') && (
-        <section>
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <h2 className="text-xl font-bold tracking-tight">Episoden</h2>
-            {data.ongoing && <span className="rounded-md bg-good px-1.5 py-0.5 text-xs font-semibold text-bg">läuft</span>}
-            <button
-              type="button"
-              onClick={() => refresh.mutate()}
-              disabled={refresh.isPending}
-              title="Holt Details und Episoden frisch von Proxer"
-              className="ml-auto rounded-full border border-line px-4 py-1.5 text-sm enabled:hover:border-accent enabled:hover:text-accent disabled:opacity-50"
-            >
-              {refresh.isPending ? 'Aktualisiert…' : '↻ Aktualisieren'}
-            </button>
-          </div>
-          {refresh.error && (
-            <div className="mb-4">
-              <ErrorNote error={refresh.error} />
-            </div>
-          )}
-          <Episodes id={data.id} ongoing={data.ongoing} page={page} setPage={setPage} />
+      {(data.persons.length > 0 || data.characters.length > 0) && (
+        <section className="grid gap-6 lg:grid-cols-2">
+          <People title="Charaktere" people={data.characters} kind="character" />
+          <People title="Personen" people={data.persons} kind="persons" />
         </section>
       )}
+
+      <section>
+        <div className="mb-5 flex flex-wrap items-center gap-2 border-b border-line pb-3">
+          {tabs.map((t) => (
+            <Chip key={t.key} active={t.key === tab} onClick={() => setParams(t.key === tabs[0].key ? {} : { tab: t.key }, { replace: true })}>
+              {t.label}
+            </Chip>
+          ))}
+          {tab === 'list' && (
+            <>
+              {data.ongoing && <span className="ml-2 rounded-md bg-good px-1.5 py-0.5 text-xs font-semibold text-bg">läuft</span>}
+              <button
+                type="button"
+                onClick={() => refresh.mutate()}
+                disabled={refresh.isPending}
+                title="Holt Details und Episoden frisch von Proxer"
+                className="ml-auto rounded-full border border-line px-4 py-1.5 text-sm enabled:hover:border-accent enabled:hover:text-accent disabled:opacity-50"
+              >
+                {refresh.isPending ? 'Aktualisiert…' : '↻ Aktualisieren'}
+              </button>
+            </>
+          )}
+        </div>
+        {refresh.error && (
+          <div className="mb-4">
+            <ErrorNote error={refresh.error} />
+          </div>
+        )}
+        {tab === 'list' && <Episodes id={data.id} ongoing={data.ongoing} page={page} setPage={setPage} />}
+        {tab === 'relation' && <Relations id={data.id} />}
+        {tab === 'recommendations' && <Recommendations id={data.id} />}
+        {tab === 'comments' && <Comments key={data.id} id={data.id} />}
+        {tab === 'music' && <Music id={data.id} />}
+      </section>
     </div>
   )
 }

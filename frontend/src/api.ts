@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { toast } from './toast'
 
 // Mirrors backend/Proxer.Api/Proxer/Models.cs
-export interface SessionInfo { loggedIn: boolean; username: string | null }
+export interface SessionInfo { loggedIn: boolean; username: string | null; userId: number | null }
 export interface NewsItem { id: string; title: string; text: string; image: string | null; date: string; author: string; category: string | null }
 export interface EntrySummary { id: number; title: string; genres: string[]; type: string; status: string; languages: string[]; rating: number | null; votes: number | null; cover: string }
 export interface EntryPage { entries: EntrySummary[]; page: number; hasNext: boolean }
@@ -11,16 +12,47 @@ export interface CalendarEntry { entryId: number; title: string; cover: string; 
 export interface CalendarDay { date: string; entries: CalendarEntry[] }
 export interface Fact { label: string; values: string[] }
 export interface Genre { name: string; description: string | null }
-export interface EntryDetails { id: number; title: string; type: string; cover: string; rating: number | null; votes: number | null; genres: Genre[]; description: string; facts: Fact[]; tabs: string[]; ongoing: boolean }
+export interface EntryDetails { id: number; title: string; type: string; cover: string; rating: number | null; votes: number | null; genres: Genre[]; description: string; facts: Fact[]; tabs: string[]; ongoing: boolean; tags: Genre[]; persons: PersonRef[]; characters: PersonRef[]; links: FactLink[] }
+export interface PersonRef { id: number; name: string; role: string; image: string | null }
+export interface RelatedEntry { entry: EntrySummary; year: string; relation: string }
+export interface Recommendation { entry: EntrySummary; up: number; down: number }
+export interface CommentPart { spoiler: boolean; text: string }
+export interface CommentRating { category: string; stars: number }
+export interface Comment { id: string; userId: number | null; username: string; avatar: string | null; content: CommentPart[]; ratings: CommentRating[]; rating: number | null; state: string; likes: number }
+export interface CommentPage { comments: Comment[]; page: number; hasNext: boolean }
+export interface Song { number: number; title: string; length: string }
+export interface Album { name: string; releaseDate: string | null; cover: string | null; songs: Song[] }
 export interface EpisodeLanguage { language: string; hosters: string[] }
 export interface Episode { number: number; title: string | null; languages: EpisodeLanguage[] }
 export interface EpisodePage { category: string; start: number; end: number; languages: string[]; episodes: Episode[]; page: number; pageCount: number }
 export interface StreamInfo { id: string; name: string; type: string; hosterType: string; embedUrl: string | null; uploader: string | null; translatorGroup: string | null }
 export interface WatchInfo { entryId: number; title: string; episode: number; episodeCount: number | null; language: string; streams: StreamInfo[] }
-export interface ListProgress { entryId: number; state: number; episode: number }
-export interface MyListItem { id: number; name: string; medium: string; episodes: number; episode: number; state: number; rating: number; cover: string }
+export interface ListProgress { entryId: number; state: number; episode: number; subscribed: boolean }
+export interface Bookmark { id: string; entryId: number; title: string; category: Category; episode: number; language: string; medium: string; available: boolean; cover: string }
+export interface ActionResult { ok: boolean; message: string }
+export interface MyListItem { id: number; cid: string; name: string; medium: string; episodes: number; episode: number; state: number; rating: number; cover: string }
 
-export type Category = 'anime' | 'manga'
+export interface NotificationCounts { messages: number; requests: number; news: number; other: number }
+export interface Notification { id: string; text: string; date: string; link: string | null; external: string | null }
+export interface NotificationPage { items: Notification[]; page: number; hasNext: boolean }
+export interface Conversation { id: number; name: string; date: string; avatar: string | null; unread: boolean }
+export interface Participant { id: number; name: string; avatar: string | null }
+export interface Message { id: string; fromId: number; username: string; avatar: string | null; text: string; timestamp: number; system: boolean; mine: boolean }
+export interface ConversationPage { id: number; participants: Participant[]; messages: Message[]; page: number; hasMore: boolean }
+export interface ForumCategory { id: number; name: string; depth: number }
+export interface ForumTopic { id: number; categoryId: number; title: string; excerpt: string | null; replies: number; views: string; author: string; lastPostBy: string; lastPostAge: string; lastAvatar: string | null; sticky: boolean }
+export interface ForumTopicPage { categoryId: number; title: string; topics: ForumTopic[]; page: number; pageCount: number }
+export interface ForumPost { id: string; userId: number | null; username: string; avatar: string | null; date: string; age: string; html: string }
+export interface ForumThread { categoryId: number; topicId: number; title: string; posts: ForumPost[]; page: number; pageCount: number }
+export interface UserProfile { id: number; name: string; avatar: string | null; statusText: string | null; facts: Fact[] }
+
+export interface LinkedEntry { id: number; title: string; medium: string; cover: string }
+export type PageKind = 'character' | 'persons' | 'industry' | 'translatorgroups'
+export interface InfoPage { kind: PageKind; id: number; title: string; image: string | null; facts: Fact[]; bodyHtml: string; entries: LinkedEntry[]; people: PersonRef[] }
+export interface FactLink { kind: PageKind; id: number; name: string; role: string }
+export interface UpdateItem { entryId: number; title: string; language: string; medium: string; uploader: string; date: string; cover: string }
+
+export type Category = 'anime' | 'manga' | 'novel'
 
 export class ApiError extends Error {
   status: number
@@ -79,14 +111,14 @@ export function useLogout() {
 export const useNews = () =>
   useQuery({ queryKey: ['news'], queryFn: () => get<NewsItem[]>('/news'), staleTime: minutes(5) })
 
-export const useEntries = (category: Category, medium: string, sort: string, page: number) =>
+export const useEntries = (category: Category, medium: string, sort: string, page: number, letter = 'all') =>
   useQuery({
-    queryKey: ['entries', category, medium, sort, page],
+    queryKey: ['entries', category, medium, sort, page, letter],
     // Provider catalogues ("provider-netflix") live under their own endpoint.
     queryFn: () =>
       medium.startsWith('provider-')
-        ? get<EntryPage>(`/providers/${medium.slice('provider-'.length)}?sort=${sort}&page=${page}`)
-        : get<EntryPage>(`/entries?category=${category}&medium=${medium}&sort=${sort}&page=${page}`),
+        ? get<EntryPage>(`/providers/${medium.slice('provider-'.length)}?sort=${sort}&page=${page}&letter=${letter}`)
+        : get<EntryPage>(`/entries?category=${category}&medium=${medium}&sort=${sort}&page=${page}&letter=${letter}`),
     staleTime: minutes(15),
     placeholderData: (previous) => previous,
   })
@@ -113,6 +145,23 @@ export const useSearch = (query: string) =>
 
 export const useEntry = (id: number) =>
   useQuery({ queryKey: ['entry', id], queryFn: () => get<EntryDetails>(`/entries/${id}`), staleTime: minutes(60) })
+
+export const useRelations = (id: number) =>
+  useQuery({ queryKey: ['relations', id], queryFn: () => get<RelatedEntry[]>(`/entries/${id}/relations`), staleTime: minutes(60) })
+
+export const useRecommendations = (id: number) =>
+  useQuery({ queryKey: ['recommendations', id], queryFn: () => get<Recommendation[]>(`/entries/${id}/recommendations`), staleTime: minutes(30) })
+
+export const useComments = (id: number, page: number, sort: 'rating' | 'latest') =>
+  useQuery({
+    queryKey: ['comments', id, page, sort],
+    queryFn: () => get<CommentPage>(`/entries/${id}/comments?page=${page}&sort=${sort}`),
+    staleTime: minutes(5),
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === id ? previous : undefined),
+  })
+
+export const useMusic = (id: number) =>
+  useQuery({ queryKey: ['music', id], queryFn: () => get<Album[]>(`/entries/${id}/music`), staleTime: minutes(60) })
 
 /** Ongoing series are re-checked every 2 minutes, finished ones only once an hour. */
 export const useEpisodes = (id: number, page: number, ongoing: boolean) =>
@@ -155,6 +204,92 @@ export const useProgress = () =>
 
 export const useMyList = (category: Category) =>
   useQuery({ queryKey: ['mylist', category], queryFn: () => get<MyListItem[]>(`/me/list/${category}`), staleTime: minutes(2) })
+
+export const useNotificationCounts = () =>
+  useQuery({ queryKey: ['notification-counts'], queryFn: () => get<NotificationCounts>('/notifications/counts'), staleTime: minutes(2), refetchInterval: minutes(5) })
+
+export const useNotifications = (page: number) =>
+  useQuery({ queryKey: ['notifications', page], queryFn: () => get<NotificationPage>(`/notifications?page=${page}`), staleTime: minutes(2), placeholderData: (previous) => previous })
+
+export const useConversations = () =>
+  useQuery({ queryKey: ['conversations'], queryFn: () => get<Conversation[]>('/messages'), staleTime: minutes(1) })
+
+export const useConversation = (id: number, page: number) =>
+  useQuery({ queryKey: ['conversation', id, page], queryFn: () => get<ConversationPage>(`/messages/${id}?page=${page}`), staleTime: minutes(1) })
+
+export const useForumCategories = () =>
+  useQuery({ queryKey: ['forum'], queryFn: () => get<ForumCategory[]>('/forum'), staleTime: minutes(360) })
+
+export const useForumTopics = (categoryId: number, page: number) =>
+  useQuery({ queryKey: ['forum', categoryId, page], queryFn: () => get<ForumTopicPage>(`/forum/${categoryId}?page=${page}`), staleTime: minutes(5), placeholderData: (previous) => previous })
+
+export const useForumThread = (categoryId: number, topicId: number, page: number) =>
+  useQuery({ queryKey: ['forum', categoryId, topicId, page], queryFn: () => get<ForumThread>(`/forum/${categoryId}/${topicId}?page=${page}`), staleTime: minutes(3), placeholderData: (previous) => previous })
+
+export const useProfile = (id: number) =>
+  useQuery({ queryKey: ['profile', id], queryFn: () => get<UserProfile>(`/users/${id}`), staleTime: minutes(15) })
+
+export const useInfoPage = (kind: string, id: number) =>
+  useQuery({ queryKey: ['page', kind, id], queryFn: () => get<InfoPage>(`/pages/${kind}/${id}`), staleTime: minutes(120) })
+
+export const useUpdates = (category: 'anime' | 'manga') =>
+  useQuery({ queryKey: ['updates', category], queryFn: () => get<UpdateItem[]>(`/updates/${category}`), staleTime: minutes(5) })
+
+export const useBookmarks = () =>
+  useQuery({ queryKey: ['bookmarks'], queryFn: () => get<Bookmark[]>('/me/bookmarks'), staleTime: minutes(2) })
+
+/**
+ * A write action on the Proxer account. Shows Proxer's answer as a toast and reloads everything
+ * that mirrors the personal list.
+ */
+function useAction<T>(run: (input: T) => Promise<ActionResult>, done: string) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: run,
+    onSuccess: (result) => {
+      toast(result.ok ? result.message || done : result.message || 'Die Aktion ist fehlgeschlagen.', result.ok)
+      for (const key of ['mylist', 'progress', 'bookmarks', 'notifications', 'notification-counts', 'conversations', 'conversation'])
+        client.invalidateQueries({ queryKey: [key] })
+    },
+    onError: (error) => toast(error instanceof Error ? error.message : 'Die Aktion ist fehlgeschlagen.', false),
+  })
+}
+
+export type ListAction = 'note' | 'favor' | 'finish'
+
+export const useListAction = (id: number) =>
+  useAction((action: ListAction) => post<ActionResult>(`/entries/${id}/list-action`, { action }), 'Gespeichert.')
+
+export const useSubscribe = (id: number) =>
+  useAction((subscribe: boolean) => post<ActionResult>(`/entries/${id}/subscribe`, { subscribe }), 'Gespeichert.')
+
+/** Sets how far an entry has been watched or read; adds it to the list when needed. */
+export const useSetProgress = (id: number, category: string) =>
+  useAction((episode: number) => post<ActionResult>(`/entries/${id}/progress`, { episode, category }), 'Fortschritt gespeichert.')
+
+export const useBookmark = (id: number, episode: number, language: string, category: Category) =>
+  useAction(
+    (target: 'this' | 'next') => post<ActionResult>(`/watch/${id}/${episode}/${language}/bookmark`, { target, category }),
+    'Lesezeichen gesetzt.',
+  )
+
+export const useDeleteBookmark = () =>
+  useAction((bookmarkId: string) => post<ActionResult>(`/me/bookmarks/${bookmarkId}/delete`, {}), 'Lesezeichen entfernt.')
+
+export const useSetListEpisode = () =>
+  useAction(({ cid, value }: { cid: string; value: number }) => post<ActionResult>(`/me/list/${cid}/episode`, { value }), 'Fortschritt gespeichert.')
+
+export const useSetListState = () =>
+  useAction(({ cid, state }: { cid: string; state: number }) => post<ActionResult>(`/me/list/${cid}/state`, { state }), 'Status geändert.')
+
+export const useDeleteNotification = () =>
+  useAction((notificationId: string) => post<ActionResult>(`/notifications/${notificationId}/delete`, {}), 'Benachrichtigung entfernt.')
+
+export const useSendMessage = (conversationId: number) =>
+  useAction((text: string) => post<ActionResult>(`/messages/${conversationId}/send`, { text }), 'Nachricht gesendet.')
+
+export const useDeleteListEntry = () =>
+  useAction((cid: string) => post<ActionResult>(`/me/list/${cid}/delete`, {}), 'Eintrag entfernt.')
 
 const languageLabels: Record<string, string> = {
   gersub: 'GerSub', gerdub: 'GerDub', engsub: 'EngSub', engdub: 'EngDub', de: 'Deutsch', en: 'Englisch',

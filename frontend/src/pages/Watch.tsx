@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { languageLabel, useWatch, type StreamInfo } from '../api'
+import { languageLabel, useBookmark, useProgress, useSetProgress, useWatch, type StreamInfo } from '../api'
 import { Chip, ErrorNote, Loading } from '../components'
 
 /** Proxer's own player first, then anything else that can be embedded. */
@@ -16,6 +16,10 @@ export default function Watch() {
   const language = params.language ?? ''
   const watch = useWatch(id, episode, language)
   const [streamId, setStreamId] = useState<string | null>(null)
+  const progress = useProgress()
+  const setProgress = useSetProgress(id, 'anime')
+  const bookmark = useBookmark(id, episode, language, 'anime')
+  const watched = (progress.data?.find((p) => p.entryId === id)?.episode ?? 0) >= episode
 
   useEffect(() => setStreamId(null), [id, episode, language])
 
@@ -86,6 +90,25 @@ export default function Watch() {
             {active.translatorGroup && `Übersetzt von ${active.translatorGroup} · `}
             {active.uploader && `Hochgeladen von ${active.uploader}`}
           </span>
+        )}
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={`${navButton} ${watched ? 'border-good/60 text-good' : ''} disabled:opacity-50`}
+          disabled={setProgress.isPending || watched}
+          onClick={() => setProgress.mutate(episode)}
+        >
+          {watched ? '✓ Gesehen' : '✓ Als gesehen markieren'}
+        </button>
+        <button type="button" className={`${navButton} disabled:opacity-50`} disabled={bookmark.isPending} onClick={() => bookmark.mutate('this')}>
+          Lesezeichen: diese Episode
+        </button>
+        {hasNext && (
+          <button type="button" className={`${navButton} disabled:opacity-50`} disabled={bookmark.isPending} onClick={() => bookmark.mutate('next')}>
+            Lesezeichen: nächste Episode
+          </button>
         )}
       </div>
 

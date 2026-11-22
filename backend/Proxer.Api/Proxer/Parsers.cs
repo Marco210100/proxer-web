@@ -182,7 +182,275 @@ public static partial class Parsers
             int.TryParse(doc.QuerySelector(".votes")?.TextContent, out var votes) ? votes : null,
             genres.ToArray(), description,
             facts.Select(f => new Fact(f.Label, f.Values.ToArray())).ToArray(), tabs,
-            Ongoing: !IsFinished(facts.FirstOrDefault(f => f.Label == "Status").Values?.FirstOrDefault()));
+            Ongoing: !IsFinished(facts.FirstOrDefault(f => f.Label == "Status").Values?.FirstOrDefault()),
+            Tags: EntryTags(html),
+            Persons: PersonCells(doc, "/persons?id="),
+            Characters: PersonCells(doc, "/character?id="),
+            Links: FactLinks(doc));
+    }
+
+    /// <summary>Tags are not in the markup; the page carries them as a script variable.</summary>
+    private static Genre[] EntryTags(string html)
+    {
+        var json = ExtractJsVar(html, "entryTags");
+        if (json is null) return [];
+        using var parsed = JsonDocument.Parse(json);
+        return parsed.RootElement.EnumerateArray()
+            .Select(t => new Genre(Str(t, "tag"), NullIfEmpty(Str(t, "description"))))
+            .Where(t => t.Name.Length > 0).ToArray();
+    }
+
+    /// <summary>Companies and translator groups named in the facts table, with their ids.</summary>
+    private static FactLink[] FactLinks(IParentNode doc) =>
+        (doc.QuerySelector("table.details")?.QuerySelectorAll("a[href^='/industry?id='], a[href^='/translatorgroups?id=']") ?? Enumerable.Empty<IElement>())
+        .Select(a =>
+        {
+            var href = a.GetAttribute("href") ?? "";
+            var id = QueryIdRegex().Match(href);
+            if (!id.Success) return null;
+            // Companies carry their role in brackets right after the link, e.g. "(Studio)".
+            var role = a.NextSibling is IText text && Regex.Match(text.Data, @"^\s*\(([^)]+)\)") is { Success: true } m ? m.Groups[1].Value : "";
+            return new FactLink(href.StartsWith("/industry") ? "industry" : "translatorgroups", int.Parse(id.Groups[1].Value), Clean(a.TextContent), role);
+        }).OfType<FactLink>().DistinctBy(l => (l.Kind, l.Id)).ToArray();
+
+    public static UpdateItem[] Updates(string html)
+    {
+        var doc = Html.ParseDocument(html);
+        var items = new List<UpdateItem>();
+        foreach (var row in doc.QuerySelectorAll("tr[class*=entry]"))
+        {
+            var link = row.QuerySelector("a[href^='/info/']");
+            var id = InfoIdRegex().Match(link?.GetAttribute("href") ?? "");
+            var cells = row.QuerySelectorAll("td");
+            if (link is null || !id.Success || cells.Length < 6) continue;
+            var entryId = int.Parse(id.Groups[1].Value);
+            items.Add(new UpdateItem(entryId, Clean(link.TextContent), Clean(cells[2].TextContent).TrimStart('-', ' '),
+                Clean(cells[3].TextContent), Clean(cells[4].TextContent), Clean(cells[5].TextContent), Cover(entryId)));
+        }
+        return items.ToArray();
+    }
+
+    /// <summary>Character, person, company and group pages share one loose layout of fact tables and free text.</summary>
+    public static InfoPage InfoPage(string html, string kind, int id)
+    {
+        var doc = Html.ParseDocument(html);
+        var root = doc.QuerySelector(".inner") ?? doc.Body!;
+        var meta = Clean(doc.GetElementById("pageMetaAjax")?.TextContent);
+        var title = Clean(root.QuerySelector("h1")?.TextContent);
+        if (title.Length == 0) title = Regex.Match(meta, @"^[^:]+:\s*(.+?)\s*-\s*Details") is { Success: true } m ? m.Groups[1].Value : "";
+        if (title.Length == 0) throw new ProxerException("Seite nicht gefunden.", 404);
+
+        var image = root.QuerySelectorAll("img").Select(i => i.GetAttribute("src") ?? "")
+            .FirstOrDefault(s => s.Contains("cdn.proxer.me/") && !s.Contains("/cover/"));
+
+        var facts = new List<Fact>();
+        var body = new System.Text.StringBuilder();
+        foreach (var row in root.QuerySelectorAll("table.details tr"))
+        {
+            var cells = row.Children.Where(c => c.LocalName == "td").ToArray();
+            // Some rows start with an image cell spanning the table; the label/value pair comes after it.
+            var labelIndex = Array.FindIndex(cells, c => c.QuerySelector("b") is not null && c.QuerySelector("img") is null);
+            if (labelIndex < 0) continue;
+            var labelCell = cells[labelIndex];
+            var label = Clean(labelCell.QuerySelector("b")?.TextContent);
+            if (label.Length == 0) continue;
+            if (labelIndex + 1 < cells.Length)
+            {
+                var value = cells[labelIndex + 1];
+                var text = value.QuerySelector("img.flag") is { } flag && Clean(value.TextContent).Length == 0
+                    ? (flag.GetAttribute("alt") ?? "").ToUpperInvariant() : Clean(value.TextContent);
+                if (text.Length > 0 && text != "-") facts.Add(new Fact(label, [text]));
+            }
+            else
+            {
+                // A lone cell holds a long text under its label, e.g. the description.
+                labelCell.QuerySelector("b")?.Remove();
+                var text = CommunityParsers.Sanitize(labelCell);
+                if (Regex.Replace(text, "<[^>]+>", "").Trim().Length > 0) body.Append("<h3>").Append(System.Net.WebUtility.HtmlEncode(label)).Append("</h3>").Append(text);
+            }
+        }
+
+        var entries = root.QuerySelectorAll("a[href^='/info/']").Select(a =>
+        {
+            var entryId = InfoIdRegex().Match(a.GetAttribute("href") ?? "");
+            var name = Clean(a.TextContent);
+            if (!entryId.Success || name.Length == 0 || a.ParentElement?.LocalName != "td") return null;
+            var eid = int.Parse(entryId.Groups[1].Value);
+            return new LinkedEntry(eid, name, Clean(a.ParentElement.NextElementSibling?.TextContent), Cover(eid));
+        }).OfType<LinkedEntry>().DistinctBy(e => e.Id).ToArray();
+
+        var people = root.QuerySelectorAll("td > a[href^='/persons?id=']").Select(a =>
+        {
+            var personId = QueryIdRegex().Match(a.GetAttribute("href") ?? "");
+            return !personId.Success ? null
+                : new PersonRef(int.Parse(personId.Groups[1].Value), Clean(a.TextContent), Clean(a.ParentElement?.NextElementSibling?.TextContent), null);
+        }).OfType<PersonRef>().DistinctBy(p => p.Id).ToArray();
+
+        // Whatever is left outside the tables is free text such as a biography.
+        foreach (var remove in root.QuerySelectorAll("table, h1, #pageMetaAjax").ToArray()) remove.Remove();
+        foreach (var heading in root.QuerySelectorAll("h2").ToArray())
+            if (Clean(heading.TextContent) is "Synchronsprecher" or "Vorkommen" or "Charakterinformationen") heading.Remove();
+        var free = CommunityParsers.Sanitize(root);
+        if (Regex.Replace(free, "<[^>]+>", "").Trim().Length > 0) body.Append(free);
+
+        return new InfoPage(kind, id, title, string.IsNullOrEmpty(image) ? null : AbsoluteUrl(image), facts.ToArray(), body.ToString(), entries, people);
+    }
+
+    /// <summary>The small portrait cells used for persons and characters.</summary>
+    private static PersonRef[] PersonCells(IParentNode root, string hrefPrefix) =>
+        root.QuerySelectorAll(".pGridCell").Select(cell =>
+        {
+            var link = cell.QuerySelector($".pGridTextBig a[href^='{hrefPrefix}']");
+            var idMatch = QueryIdRegex().Match(link?.GetAttribute("href") ?? "");
+            if (link is null || !idMatch.Success) return null;
+            var image = UrlInStyleRegex().Match(cell.QuerySelector(".pGridImageLink")?.GetAttribute("style") ?? "");
+            return new PersonRef(int.Parse(idMatch.Groups[1].Value), Clean(link.TextContent),
+                Clean(cell.QuerySelector(".pGridText")?.TextContent),
+                image.Success ? AbsoluteUrl(image.Groups[1].Value.Trim('\'', '"')) : null);
+        }).OfType<PersonRef>().ToArray();
+
+    public static RelatedEntry[] Relations(string html, int id)
+    {
+        var doc = Html.ParseDocument(html);
+        var summaries = EntryList(html, 1).Entries.ToDictionary(e => e.Id);
+        var related = new List<RelatedEntry>();
+        foreach (var row in doc.QuerySelectorAll("tr[class^=entry]"))
+        {
+            var idMatch = InfoIdRegex().Match(row.QuerySelector("a[href^='/info/']")?.GetAttribute("href") ?? "");
+            var cells = row.QuerySelectorAll("td");
+            if (!idMatch.Success || cells.Length < 8) continue;
+            var entryId = int.Parse(idMatch.Groups[1].Value);
+            if (entryId == id || !summaries.TryGetValue(entryId, out var summary)) continue;
+            related.Add(new RelatedEntry(summary, Clean(cells[6].TextContent), Clean(cells[7].TextContent)));
+        }
+        return related.ToArray();
+    }
+
+    public static Recommendation[] Recommendations(string html)
+    {
+        var doc = Html.ParseDocument(html);
+        var result = new List<Recommendation>();
+        foreach (var cell in doc.QuerySelectorAll(".infocell"))
+        {
+            var idMatch = InfoIdRegex().Match(cell.QuerySelector("a[href^='/info/']")?.GetAttribute("href") ?? "");
+            if (!idMatch.Success) continue;
+            var id = int.Parse(idMatch.Groups[1].Value);
+            var blocks = cell.Children.Where(c => c.LocalName == "div").ToArray();
+            var rating = RatingRegex().Match(blocks.ElementAtOrDefault(2)?.TextContent ?? "");
+            var summary = new EntrySummary(id,
+                Title: Clean(blocks.ElementAtOrDefault(0)?.QuerySelector("a")?.TextContent),
+                Genres: [],
+                Type: Clean(blocks.ElementAtOrDefault(1)?.TextContent),
+                Status: blocks.ElementAtOrDefault(1)?.QuerySelector("img")?.GetAttribute("title") ?? "",
+                Languages: [],
+                Rating: rating.Success ? ParseDouble(rating.Groups[1].Value) : null,
+                Votes: rating.Success ? int.Parse(rating.Groups[2].Value) : null,
+                Cover: Cover(id));
+            int Count(string selector) => int.TryParse(cell.QuerySelector(selector + " .count")?.TextContent, out var n) ? n : 0;
+            result.Add(new Recommendation(summary, Count(".recommend_positive"), Count(".recommend_negative")));
+        }
+        return result.OrderByDescending(r => r.Up - r.Down).ToArray();
+    }
+
+    public static CommentPage Comments(string html, int page)
+    {
+        var doc = Html.ParseDocument(html);
+        var comments = new List<Comment>();
+        foreach (var table in doc.QuerySelectorAll("table.details"))
+        {
+            var like = table.QuerySelector("a.ajaxComment[title^='recommend:']");
+            var cells = table.QuerySelector("tr")?.Children.Where(c => c.LocalName == "td").ToArray();
+            if (like is null || cells is null || cells.Length < 3) continue;
+
+            var user = cells[0].QuerySelector("a[href^='/user/']");
+            var userId = UserIdRegex().Match(user?.GetAttribute("href") ?? "");
+            var avatar = user?.QuerySelector("img")?.GetAttribute("src");
+            var ratings = cells[1].QuerySelectorAll("table.misc_rating tr").Select(row =>
+            {
+                var tds = row.QuerySelectorAll("td");
+                return tds.Length < 2 ? null : new CommentRating(Clean(tds[0].TextContent), tds[1].QuerySelectorAll("img[src$='stern.png']").Length);
+            }).OfType<CommentRating>().ToArray();
+
+            var parts = new List<CommentPart>();
+            var body = cells[1].Children.FirstOrDefault(c => c.LocalName == "div");
+            if (body is not null)
+            {
+                var text = new System.Text.StringBuilder();
+                CollectText(body, text, parts);
+                FlushText(text, parts);
+            }
+
+            var stars = cells[2].QuerySelector("p")?.QuerySelectorAll("img");
+            var likes = BracketNumberRegex().Match(like.TextContent);
+            comments.Add(new Comment(
+                Id: like.GetAttribute("title")!["recommend:".Length..],
+                UserId: userId.Success ? int.Parse(userId.Groups[1].Value) : null,
+                Username: Clean(user?.TextContent),
+                Avatar: string.IsNullOrEmpty(avatar) ? null : AbsoluteUrl(avatar),
+                Content: parts.ToArray(),
+                Ratings: ratings,
+                Rating: stars is { Length: > 0 } ? stars.Count(i => (i.GetAttribute("src") ?? "").EndsWith("stern.png")) : null,
+                State: CommentStateRegex().Match(cells[2].InnerHtml) is { Success: true } s ? Clean(s.Groups[1].Value) : "",
+                Likes: likes.Success ? int.Parse(likes.Groups[1].Value) : 0));
+        }
+        var hasNext = doc.QuerySelectorAll("a.menu").Any(a => a.TextContent.Trim() == ">");
+        return new CommentPage(comments.ToArray(), page, hasNext);
+    }
+
+    /// <summary>Flattens comment markup to text, keeping line breaks and splitting off spoiler blocks.</summary>
+    private static void CollectText(INode node, System.Text.StringBuilder text, List<CommentPart> parts)
+    {
+        foreach (var child in node.ChildNodes)
+        {
+            if (child is IText t) text.Append(WhitespaceRegex().Replace(t.Data, " "));
+            else if (child is IElement { LocalName: "br" }) text.Append('\n');
+            else if (child is IElement spoiler && spoiler.ClassList.Contains("spoiler"))
+            {
+                FlushText(text, parts);
+                var inner = spoiler.Children.LastOrDefault(c => c.LocalName == "div");
+                if (inner is null) continue;
+                var hidden = new List<CommentPart>();
+                var buffer = new System.Text.StringBuilder();
+                CollectText(inner, buffer, hidden);
+                FlushText(buffer, hidden);
+                var joined = string.Join("\n", hidden.Select(p => p.Text));
+                if (joined.Length > 0) parts.Add(new CommentPart(true, joined));
+            }
+            else if (child is IElement { LocalName: "script" or "style" }) continue;
+            else CollectText(child, text, parts);
+        }
+    }
+
+    private static void FlushText(System.Text.StringBuilder text, List<CommentPart> parts)
+    {
+        var value = string.Join("\n", text.ToString().Split('\n').Select(l => l.Trim())).Trim();
+        value = Regex.Replace(value, @"\n{3,}", "\n\n");
+        if (value.Length > 0) parts.Add(new CommentPart(false, value));
+        text.Clear();
+    }
+
+    public static Album[] Music(string html)
+    {
+        var doc = Html.ParseDocument(html);
+        var albums = new List<Album>();
+        foreach (var row in doc.QuerySelectorAll("div[style*='display:table-row']"))
+        {
+            var info = row.QuerySelectorAll("table").FirstOrDefault();
+            if (info is null) continue;
+            string? Field(string label) => info.QuerySelectorAll("tr")
+                .Select(r => r.QuerySelectorAll("td"))
+                .Where(tds => tds.Length == 2 && Clean(tds[0].TextContent) == label)
+                .Select(tds => Clean(tds[1].TextContent)).FirstOrDefault();
+            var cover = info.QuerySelector("img")?.GetAttribute("src");
+            var songs = row.QuerySelectorAll("table#box-table-a tr").Select(r => r.QuerySelectorAll("td"))
+                .Where(tds => tds.Length >= 3 && int.TryParse(tds[0].TextContent.Trim(), out _))
+                .Select(tds => new Song(int.Parse(tds[0].TextContent.Trim()), Clean(tds[1].TextContent), Clean(tds[2].TextContent)))
+                .ToArray();
+            var name = Field("Name");
+            if (name is null) continue;
+            albums.Add(new Album(name, Field("Release-Date"), string.IsNullOrEmpty(cover) ? null : AbsoluteUrl(cover), songs));
+        }
+        return albums.ToArray();
     }
 
     public static EpisodePage Episodes(string html, int id, int page)
@@ -254,7 +522,7 @@ public static partial class Parsers
         using var parsed = JsonDocument.Parse(json);
         if (!parsed.RootElement.TryGetProperty("entries", out var entries) || entries.ValueKind != JsonValueKind.Array) return [];
         return entries.EnumerateArray()
-            .Select(e => new ListProgress(Int(e, "tid"), Int(e, "state"), Int(e, "episode"))).ToArray();
+            .Select(e => new ListProgress(Int(e, "tid"), Int(e, "state"), Int(e, "episode"), Int(e, "subscribe") == 1)).ToArray();
     }
 
     public static MyListItem[] MyList(string html)
@@ -265,9 +533,51 @@ public static partial class Parsers
         return parsed.RootElement.EnumerateArray().Select(e =>
         {
             var id = Int(e, "id");
-            return new MyListItem(id, Str(e, "name"), Str(e, "medium"), Int(e, "episodes"), Int(e, "episode"),
-                Int(e, "entry_state"), Int(e, "rating"), Cover(id));
+            return new MyListItem(id, Str(e, "cid"), Str(e, "name"), Str(e, "medium"), Int(e, "episodes"), Int(e, "episode"),
+                Int(e, "comment_state"), Int(e, "rating"), Cover(id));
         }).ToArray();
+    }
+
+    public static Bookmark[] Bookmarks(string html)
+    {
+        var doc = Html.ParseDocument(html);
+        var bookmarks = new List<Bookmark>();
+        foreach (var row in doc.QuerySelectorAll("tr[id^=entry]"))
+        {
+            var link = row.QuerySelector("a[href^='/watch/'], a[href^='/chapter/']");
+            var match = BookmarkLinkRegex().Match(link?.GetAttribute("href") ?? "");
+            var cells = row.QuerySelectorAll("td");
+            if (link is null || !match.Success || cells.Length < 6) continue;
+            var entryId = int.Parse(match.Groups[2].Value);
+            bookmarks.Add(new Bookmark(
+                Id: row.Id!["entry".Length..],
+                EntryId: entryId,
+                Title: Clean(link.TextContent),
+                Category: match.Groups[1].Value == "watch" ? "anime" : "manga",
+                Episode: int.Parse(match.Groups[3].Value),
+                Language: match.Groups[4].Value,
+                Medium: string.Join(" ", TextLines(cells[4])),
+                Available: (cells[5].QuerySelector("img")?.GetAttribute("src") ?? "").Contains("online"),
+                Cover: Cover(entryId)));
+        }
+        return bookmarks.ToArray();
+    }
+
+    /// <summary>Reads the JSON answer Proxer gives to a write action: <c>{error, msg, title}</c>.</summary>
+    public static (bool Ok, string Message) ActionAnswer(string body)
+    {
+        try
+        {
+            using var parsed = JsonDocument.Parse(body);
+            var root = parsed.RootElement;
+            var message = string.Join(" ", new[] { Str(root, "title"), Str(root, "msg"), Str(root, "message") }.Where(s => s.Length > 0));
+            message = Clean(Html.ParseDocument($"<body>{message}</body>").Body?.TextContent);
+            return (Str(root, "error") is "0" or "", message);
+        }
+        catch (JsonException)
+        {
+            throw new ProxerException("Proxer hat auf die Aktion unerwartet geantwortet.");
+        }
     }
 
     /// <summary>Only finished or cancelled works stop getting new episodes; anything else may change any time.</summary>
@@ -337,6 +647,11 @@ public static partial class Parsers
 
     [GeneratedRegex(@"y1=(\d{4})&(?:amp;)?s1=(\d)")] private static partial Regex SeasonLinkRegex();
     [GeneratedRegex(@"/watch/\d+/(\d+)/([a-z]+)")] private static partial Regex WatchLinkRegex();
+    [GeneratedRegex(@"[?&]id=(\d+)")] private static partial Regex QueryIdRegex();
+    [GeneratedRegex(@"/user/(\d+)")] private static partial Regex UserIdRegex();
+    [GeneratedRegex(@"\[(\d+)\]")] private static partial Regex BracketNumberRegex();
+    [GeneratedRegex(@"Stand:\s*</b>\s*([^<]+)")] private static partial Regex CommentStateRegex();
+    [GeneratedRegex(@"^/(watch|chapter)/(\d+)/(\d+)/([a-z]+)")] private static partial Regex BookmarkLinkRegex();
     [GeneratedRegex(@"\s+")] private static partial Regex WhitespaceRegex();
     [GeneratedRegex(@"<br\s*/?>", RegexOptions.IgnoreCase)] private static partial Regex BreakRegex();
     [GeneratedRegex(@"url\(([^)]+)\)")] private static partial Regex UrlInStyleRegex();

@@ -8,10 +8,20 @@ const mediums: Record<Category, { value: string; label: string }[]> = {
     { value: 'movie', label: 'Filme' },
     { value: 'ova', label: 'OVA' },
     { value: 'airing', label: 'Airing' },
+    { value: 'hentai', label: 'Hentai' },
   ],
   manga: [
     { value: 'mangaseries', label: 'Serien' },
     { value: 'oneshot', label: 'One-Shots' },
+    { value: 'doujin', label: 'Doujinshi' },
+    { value: 'airing', label: 'Airing' },
+    { value: 'hmanga', label: 'H-Manga' },
+  ],
+  novel: [
+    { value: 'lightnovel', label: 'Light Novel' },
+    { value: 'webnovel', label: 'Web Novel' },
+    { value: 'visualnovel', label: 'Visual Novel' },
+    { value: 'airing', label: 'Airing' },
   ],
 }
 
@@ -20,7 +30,10 @@ const providers = [
   { value: 'provider-aod', label: 'Anime-on-Demand' },
   { value: 'provider-crunchyroll', label: 'Crunchyroll' },
   { value: 'provider-netflix', label: 'Netflix' },
+  { value: 'provider-amazon', label: 'Amazon' },
 ]
+
+const letters = ['all', '0-9', ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ']
 
 const sorts = [
   { value: 'rating', label: 'Beste Bewertung' },
@@ -30,11 +43,12 @@ const sorts = [
 
 export default function Browse({ category }: { category: Category }) {
   const [params, setParams] = useSearchParams()
-  const sources = category === 'anime' ? [...mediums.anime, ...providers] : mediums.manga
+  const sources = category === 'anime' ? [...mediums.anime, ...providers] : mediums[category]
   const medium = sources.find((m) => m.value === params.get('medium'))?.value ?? sources[0].value
   const sort = sorts.find((s) => s.value === params.get('sort'))?.value ?? 'rating'
   const page = Math.max(1, Number(params.get('seite')) || 1)
-  const entries = useEntries(category, medium, sort, page)
+  const letter = letters.find((l) => l === params.get('buchstabe')) ?? 'all'
+  const entries = useEntries(category, medium, sort, page, letter)
 
   const update = (changes: Record<string, string>) => {
     const next = new URLSearchParams(params)
@@ -62,7 +76,7 @@ export default function Browse({ category }: { category: Category }) {
           </select>
         }
       >
-        {category === 'anime' ? 'Anime' : 'Manga'}
+        {{ anime: 'Anime', manga: 'Manga', novel: 'Novel' }[category]}
       </PageTitle>
 
       <div className="mb-6 flex flex-wrap items-center gap-2">
@@ -82,6 +96,21 @@ export default function Browse({ category }: { category: Category }) {
             ))}
           </>
         )}
+      </div>
+
+      <div className="mb-6 flex flex-wrap gap-1" aria-label="Anfangsbuchstabe">
+        {letters.map((l) => (
+          <button
+            key={l}
+            type="button"
+            onClick={() => update({ buchstabe: l })}
+            className={`min-w-7 rounded-md px-1.5 py-0.5 text-xs transition-colors ${
+              l === letter ? 'bg-accent-soft text-accent' : 'text-muted hover:text-ink'
+            }`}
+          >
+            {l === 'all' ? 'Alle' : l}
+          </button>
+        ))}
       </div>
 
       {entries.isLoading && <Loading />}

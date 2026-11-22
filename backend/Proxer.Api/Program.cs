@@ -51,19 +51,20 @@ api.MapGet("/news", async (ProxerClient proxer, CancellationToken ct) =>
 api.MapGet("/entries", async (ProxerClient proxer, CancellationToken ct,
     string category = "anime", string medium = "animeseries", string sort = "rating", string letter = "all", int page = 1) =>
 {
-    if (category is not ("anime" or "manga") || !Slug(medium) || sort is not ("rating" or "clicks" or "title")
+    if (category is not ("anime" or "manga" or "novel") || !Slug(medium) || sort is not ("rating" or "clicks" or "title")
         || !Regex.IsMatch(letter, "^(all|0-9|[A-Z])$") || page < 1)
         return Results.BadRequest(new { error = "Ungültige Filter." });
     var html = await proxer.GetPageAsync($"/{category}/{medium}/{sort}/{letter}/{page}?format=raw", Minutes(15), ct);
     return Results.Ok(Parsers.EntryList(html, page));
 });
 
-api.MapGet("/providers/{provider}", async (ProxerClient proxer, CancellationToken ct, string provider, string sort = "clicks", int page = 1) =>
+api.MapGet("/providers/{provider}", async (ProxerClient proxer, CancellationToken ct, string provider,
+    string sort = "clicks", string letter = "all", int page = 1) =>
 {
     if (provider is not ("proxerstream" or "aod" or "crunchyroll" or "netflix" or "amazon")
-        || sort is not ("rating" or "clicks" or "title") || page < 1)
+        || sort is not ("rating" or "clicks" or "title") || !Regex.IsMatch(letter, "^(all|0-9|[A-Z])$") || page < 1)
         return Results.BadRequest(new { error = "Ungültige Filter." });
-    var html = await proxer.GetPageAsync($"/provider/{provider}/{sort}/all/{page}?format=raw", Minutes(15), ct);
+    var html = await proxer.GetPageAsync($"/provider/{provider}/{sort}/{letter}/{page}?format=raw", Minutes(15), ct);
     return Results.Ok(Parsers.EntryList(html, page));
 });
 
@@ -97,6 +98,22 @@ api.MapGet("/entries/{id:int}/episodes", async (ProxerClient proxer, Cancellatio
     return Parsers.Episodes(await proxer.GetPageAsync($"/info/{id}/list/{page}?format=raw", ttl, ct, refresh), id, page);
 });
 
+api.MapGet("/entries/{id:int}/relations", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    Parsers.Relations(await proxer.GetPageAsync($"/info/{id}/relation?format=raw", Minutes(60), ct), id));
+
+api.MapGet("/entries/{id:int}/recommendations", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    Parsers.Recommendations(await proxer.GetPageAsync($"/info/{id}/recommendations?format=raw", Minutes(30), ct)));
+
+api.MapGet("/entries/{id:int}/comments", async (ProxerClient proxer, CancellationToken ct, int id, int page = 1, string sort = "latest") =>
+{
+    if (sort is not ("latest" or "rating") || page < 1) return Results.BadRequest(new { error = "Ungültige Filter." });
+    var html = await proxer.GetPageAsync($"/info/{id}/comments/{page}?sort={sort}&format=raw", Minutes(5), ct);
+    return Results.Ok(Parsers.Comments(html, page));
+});
+
+api.MapGet("/entries/{id:int}/music", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    Parsers.Music(await proxer.GetPageAsync($"/info/{id}/music?format=raw", Minutes(60), ct)));
+
 api.MapGet("/watch/{id:int}/{episode:int}/{language}", async (ProxerClient proxer, CancellationToken ct, int id, int episode, string language) =>
 {
     if (!Slug(language)) return Results.BadRequest(new { error = "Ungültige Sprache." });
@@ -107,15 +124,145 @@ api.MapGet("/watch/{id:int}/{episode:int}/{language}", async (ProxerClient proxe
 api.MapGet("/me/progress", async (ProxerClient proxer, CancellationToken ct) =>
     Parsers.Progress(await proxer.GetPageAsync("/ucp?format=json&type=mylistentries", Minutes(1), ct)));
 
+// ---- Write actions. All take a JSON body, so plain cross-site form posts cannot trigger them. ----
+
+api.MapPost("/entries/{id:int}/list-action", async (ProxerClient proxer, CancellationToken ct, int id, ListActionRequest request) =>
+    request.Action is not ("note" or "favor" or "finish")
+        ? Results.BadRequest(new { error = "Unbekannte Aktion." })
+        : Results.Ok(await proxer.SendActionAsync(HttpMethod.Post, $"/info/{id}?format=json&json={request.Action}", "checkPost", ct, "/ucp")));
+
+api.MapPost("/entries/{id:int}/subscribe", async (ProxerClient proxer, CancellationToken ct, int id, SubscribeRequest request) =>
+    await proxer.SendActionAsync(HttpMethod.Get, $"/info/{id}?format=json&json=subscribe&positive={(request.Subscribe ? "1" : "-1")}", null, ct, "/ucp"));
+
+// Sets how far the entry has been watched or read; adds it to the list first when it is not on it yet.
+api.MapPost("/entries/{id:int}/progress", async (ProxerClient proxer, CancellationToken ct, int id, ProgressRequest request) =>
+{
+    if (request.Category is not ("anime" or "manga" or "novel") || request.Episode < 0)
+        return Results.BadRequest(new { error = "Ungültige Angaben." });
+    var listPath = $"/ucp?s={request.Category}&format=raw";
+    async Task<MyListItem?> Find() => Parsers.MyList(await proxer.GetPageAsync(listPath, Minutes(2), ct)).FirstOrDefault(i => i.Id == id);
+
+    var item = await Find();
+    if (item is null)
+    {
+        var added = await proxer.SendActionAsync(HttpMethod.Post, $"/info/{id}?format=json&json=note", "checkPost", ct, "/ucp");
+        if (!added.Ok) return Results.Ok(added);
+        item = await Find();
+        if (item is null) return Results.Ok(new ActionResult(false, "Der Eintrag ließ sich nicht in die Liste aufnehmen."));
+    }
+
+    var result = await proxer.SendActionAsync(HttpMethod.Post, $"/ucp?format=json&type=incState&id={item.Cid}&value={request.Episode}", "check", ct, "/ucp");
+    // A planned entry that now has progress is being watched.
+    if (result.Ok && item.State == 2 && request.Episode > 0)
+        await proxer.SendActionAsync(HttpMethod.Post, $"/comment?id={item.Cid}&format=json&json=updateState&status=1", "check", ct, "/ucp");
+    return Results.Ok(result);
+});
+
+api.MapPost("/watch/{id:int}/{episode:int}/{language}/bookmark", async (ProxerClient proxer, CancellationToken ct,
+    int id, int episode, string language, BookmarkRequest request) =>
+{
+    if (!Slug(language) || request.Target is not ("this" or "next") || request.Category is not ("anime" or "manga"))
+        return Results.BadRequest(new { error = "Ungültige Angaben." });
+    var page = request.Category == "anime" ? "watch" : "chapter";
+    return Results.Ok(await proxer.SendActionAsync(HttpMethod.Post,
+        $"/{page}/{id}/{episode}/{language}?format=json&type=reminder&title=reminder_{request.Target}", "check", ct, "/ucp"));
+});
+
+api.MapGet("/me/bookmarks", async (ProxerClient proxer, CancellationToken ct) =>
+    Parsers.Bookmarks(await proxer.GetPageAsync("/ucp?s=reminder&format=raw", Minutes(2), ct)));
+
+api.MapPost("/me/bookmarks/{bookmarkId:long}/delete", async (ProxerClient proxer, CancellationToken ct, long bookmarkId, EmptyRequest _) =>
+    await proxer.SendActionAsync(HttpMethod.Post, $"/ucp?format=json&type=deleteReminder&id={bookmarkId}", "check", ct, "/ucp"));
+
+api.MapPost("/me/list/{cid:long}/episode", async (ProxerClient proxer, CancellationToken ct, long cid, EpisodeRequest request) =>
+    request.Value < 0
+        ? Results.BadRequest(new { error = "Ungültiger Wert." })
+        : Results.Ok(await proxer.SendActionAsync(HttpMethod.Post, $"/ucp?format=json&type=incState&id={cid}&value={request.Value}", "check", ct, "/ucp")));
+
+api.MapPost("/me/list/{cid:long}/state", async (ProxerClient proxer, CancellationToken ct, long cid, StateRequest request) =>
+    request.State is < 0 or > 3
+        ? Results.BadRequest(new { error = "Ungültiger Status." })
+        : Results.Ok(await proxer.SendActionAsync(HttpMethod.Post, $"/comment?id={cid}&format=json&json=updateState&status={request.State}", "check", ct, "/ucp")));
+
+api.MapPost("/me/list/{cid:long}/delete", async (ProxerClient proxer, CancellationToken ct, long cid, EmptyRequest _) =>
+    await proxer.SendActionAsync(HttpMethod.Post, $"/comment?id={cid}&format=json&json=delete", "check", ct, "/ucp"));
+
 api.MapGet("/me/list/{category}", async (ProxerClient proxer, CancellationToken ct, string category) =>
 {
-    if (category is not ("anime" or "manga")) return Results.BadRequest(new { error = "Ungültige Kategorie." });
-    var items = Parsers.MyList(await proxer.GetPageAsync($"/ucp?s={category}&format=raw", Minutes(2), ct));
-    // The list page does not carry the watch state; it comes from the progress endpoint.
-    var states = Parsers.Progress(await proxer.GetPageAsync("/ucp?format=json&type=mylistentries", Minutes(1), ct))
-        .GroupBy(p => p.EntryId).ToDictionary(g => g.Key, g => g.First().State);
-    return Results.Ok(items.Select(i => i with { State = states.GetValueOrDefault(i.Id, -1) }));
+    if (category is not ("anime" or "manga" or "novel")) return Results.BadRequest(new { error = "Ungültige Kategorie." });
+    return Results.Ok(Parsers.MyList(await proxer.GetPageAsync($"/ucp?s={category}&format=raw", Minutes(2), ct)));
 });
+
+api.MapGet("/pages/{kind}/{id:int}", async (ProxerClient proxer, CancellationToken ct, string kind, int id) =>
+{
+    if (kind is not ("character" or "persons" or "industry" or "translatorgroups"))
+        return Results.BadRequest(new { error = "Unbekannte Seite." });
+    return Results.Ok(Parsers.InfoPage(await proxer.GetPageAsync($"/{kind}?id={id}&format=raw", Minutes(120), ct), kind, id));
+});
+
+api.MapGet("/updates/{category}", async (ProxerClient proxer, CancellationToken ct, string category) =>
+    category is not ("anime" or "manga")
+        ? Results.BadRequest(new { error = "Ungültige Kategorie." })
+        : Results.Ok(Parsers.Updates(await proxer.GetPageAsync($"/{category}/updates?format=raw", Minutes(5), ct))));
+
+// ---- Community: notifications, messages, forum, profiles ----
+
+api.MapGet("/notifications/counts", async (ProxerClient proxer, CancellationToken ct) =>
+    CommunityParsers.Counts(await proxer.GetPageAsync("/components/com_proxer/misc/notifications.php", Minutes(2), ct)));
+
+api.MapGet("/notifications", async (ProxerClient proxer, CancellationToken ct, int page = 1) =>
+    CommunityParsers.Notifications(await proxer.GetPageAsync($"/notifications?p={Math.Max(page, 1)}&format=raw", Minutes(2), ct), Math.Max(page, 1)));
+
+api.MapPost("/notifications/{notificationId:long}/delete", async (ProxerClient proxer, CancellationToken ct, long notificationId, EmptyRequest _) =>
+    await proxer.SendFormActionAsync(HttpMethod.Post, "/notifications?format=json&s=deleteNotification",
+        new Dictionary<string, string> { ["id"] = notificationId.ToString() }, ct, "/notifications", "/components/com_proxer/misc/notifications"));
+
+api.MapGet("/messages", async (ProxerClient proxer, CancellationToken ct) =>
+    CommunityParsers.Conversations(await proxer.GetPageAsync("/messages?format=raw", Minutes(1), ct)));
+
+// Opening a conversation marks it as read on Proxer, exactly as on the website.
+api.MapGet("/messages/{conversationId:int}", async (ProxerClient proxer, CancellationToken ct, int conversationId, int page = 0) =>
+{
+    page = Math.Max(page, 0);
+    var participants = CommunityParsers.Participants(await proxer.GetPageAsync($"/messages?id={conversationId}&format=raw", Minutes(10), ct));
+    var (messages, hasMore) = CommunityParsers.Messages(await proxer.GetJsonAsync($"/messages/?format=json&json=messages&id={conversationId}&p={page}", ct));
+    return new ConversationPage(conversationId, participants, messages, page, hasMore);
+});
+
+api.MapPost("/messages/{conversationId:int}/send", async (ProxerClient proxer, CancellationToken ct, int conversationId, SendMessageRequest request) =>
+    string.IsNullOrWhiteSpace(request.Text) || request.Text.Length > 65000
+        ? Results.BadRequest(new { error = "Die Nachricht ist leer oder zu lang." })
+        : Results.Ok(await proxer.SendFormActionAsync(HttpMethod.Post, $"/messages/?format=json&json=answer&id={conversationId}",
+            new Dictionary<string, string> { ["message"] = request.Text }, ct, "/messages", "/components/com_proxer/misc/notifications")));
+
+api.MapGet("/forum", async (ProxerClient proxer, CancellationToken ct) =>
+    CommunityParsers.ForumCategories(await proxer.GetPageAsync("/forum", Minutes(360), ct)));
+
+api.MapGet("/forum/{categoryId:int}", async (ProxerClient proxer, CancellationToken ct, int categoryId, int page = 1) =>
+{
+    page = Math.Max(page, 1);
+    var html = await proxer.GetPageAsync($"/forum/{categoryId}?start={(page - 1) * 30}", Minutes(5), ct);
+    return CommunityParsers.ForumTopics(html, categoryId, page);
+});
+
+api.MapGet("/forum/{categoryId:int}/{topicId:int}", async (ProxerClient proxer, CancellationToken ct, int categoryId, int topicId, int page = 1) =>
+{
+    page = Math.Max(page, 1);
+    var html = await proxer.GetPageAsync($"/forum/{categoryId}/{topicId}?start={(page - 1) * 15}", Minutes(3), ct);
+    return CommunityParsers.ForumThread(html, categoryId, topicId, page);
+});
+
+api.MapGet("/users/{id:int}", async (ProxerClient proxer, CancellationToken ct, int id) =>
+    CommunityParsers.Profile(
+        await proxer.GetPageAsync($"/user/{id}/overview?format=raw", Minutes(15), ct),
+        await proxer.GetPageAsync($"/user/{id}/about?format=raw", Minutes(15), ct), id));
+
+// Development aid: shows the raw Proxer markup of a page, through the same session, throttle and limits as everything else.
+if (app.Environment.IsDevelopment())
+    api.MapGet("/dev/raw", async (ProxerClient proxer, CancellationToken ct, string path, bool token = false) =>
+        path.StartsWith('/') && !path.StartsWith("//")
+            ? Results.Text(token ? await proxer.GetJsonAsync(path, ct) : await proxer.GetPageAsync(path, TimeSpan.Zero, ct), "text/plain")
+            : Results.BadRequest());
 
 app.Run();
 
@@ -125,6 +272,22 @@ static string FindRepoRoot()
         if (Directory.Exists(Path.Combine(dir.FullName, ".git"))) return dir.FullName;
     return Directory.GetCurrentDirectory();
 }
+
+record ListActionRequest(string Action);
+
+record SubscribeRequest(bool Subscribe);
+
+record ProgressRequest(int Episode, string Category);
+
+record BookmarkRequest(string Target, string Category);
+
+record EpisodeRequest(int Value);
+
+record StateRequest(int State);
+
+record EmptyRequest;
+
+record SendMessageRequest(string Text);
 
 record LoginRequest(string Username, string Password, string? SecretKey);
 

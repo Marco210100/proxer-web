@@ -35,6 +35,8 @@ public partial class ProxerClient
     private DateTime _sessionCheckedAt = DateTime.MinValue;
     private DateTime _lastLoginAttempt = DateTime.MinValue;
     private string? _username;
+    private string? _token;
+    private int? _userId;
 
     public ProxerClient(ProxerOptions options, IMemoryCache cache, ILogger<ProxerClient> log)
     {
@@ -70,7 +72,7 @@ public partial class ProxerClient
     public async Task<SessionInfo> GetSessionAsync(CancellationToken ct)
     {
         await CheckSessionAsync(ct);
-        return new SessionInfo(_username is not null, _username);
+        return new SessionInfo(_username is not null, _username, _userId);
     }
 
     /// <summary>
@@ -124,7 +126,7 @@ public partial class ProxerClient
             }
 
             ClearCache();
-            return new SessionInfo(true, _username);
+            return new SessionInfo(true, _username, _userId);
         }
         finally
         {
@@ -194,6 +196,54 @@ public partial class ProxerClient
         return body;
     }
 
+    /// <summary>
+    /// Performs a write action the way Proxer's own pages do: a request carrying the session's security token.
+    /// Cached pages starting with one of <paramref name="invalidate"/> are dropped afterwards.
+    /// </summary>
+    public Task<ActionResult> SendActionAsync(HttpMethod method, string path, string? checkField, CancellationToken ct, params string[] invalidate) =>
+        SendFormActionAsync(method, path, checkField is null ? null : new Dictionary<string, string> { [checkField] = "1" }, ct, invalidate);
+
+    public async Task<ActionResult> SendFormActionAsync(HttpMethod method, string path, Dictionary<string, string>? form, CancellationToken ct, params string[] invalidate)
+    {
+        var body = await SendWithTokenAsync(method, path, form, ct);
+        var (ok, message) = Parsers.ActionAnswer(body);
+        foreach (var prefix in invalidate) Invalidate(prefix);
+        return new ActionResult(ok, message);
+    }
+
+    /// <summary>Reads one of Proxer's JSON endpoints that only answer with the session's security token.</summary>
+    public Task<string> GetJsonAsync(string path, CancellationToken ct) => SendWithTokenAsync(HttpMethod.Get, path, null, ct);
+
+    private async Task<string> SendWithTokenAsync(HttpMethod method, string path, Dictionary<string, string>? form, CancellationToken ct)
+    {
+        await RequireSessionAsync(ct);
+        for (var attempt = 0; ; attempt++)
+        {
+            if (_token is null) await RequireSessionAsync(ct, force: true);
+            if (_token is null) throw new ProxerException("Sicherheitstoken von Proxer nicht gefunden.");
+
+            var url = $"{path}{(path.Contains('?') ? '&' : '?')}{_token}=1";
+            var (body, _) = await SendAsync(method, url, form is null ? null : new FormUrlEncodedContent(form), ct);
+
+            // The token changes with the session; fetch a fresh one once and try again.
+            if (attempt == 0 && body.Length < 300 && (body.Contains("Sicherheitstoken") || body.Contains("Sicherheitscode")))
+            {
+                _token = null;
+                continue;
+            }
+            return body;
+        }
+    }
+
+    private void Invalidate(string prefix)
+    {
+        foreach (var key in _fetchedAt.Keys.Where(k => k.StartsWith(prefix)).ToArray())
+        {
+            _cache.Remove(key);
+            _fetchedAt.TryRemove(key, out _);
+        }
+    }
+
     private async Task RequireSessionAsync(CancellationToken ct, bool force = false)
     {
         await CheckSessionAsync(ct, force);
@@ -220,6 +270,9 @@ public partial class ProxerClient
     {
         _username = !IsLoggedIn(home) ? null
             : WelcomeRegex().Match(home) is { Success: true } m ? WebUtility.HtmlDecode(m.Groups[1].Value) : "Proxer-Nutzer";
+        var token = ProxerTokenRegex().Match(home);
+        _token = !token.Success ? null : (token.Groups[1].Success ? token.Groups[1] : token.Groups[2]).Value;
+        _userId = _username is not null && OwnProfileRegex().Match(home) is { Success: true } profile ? int.Parse(profile.Groups[1].Value) : null;
         _sessionCheckedAt = DateTime.UtcNow;
         SaveCookies();
     }
@@ -307,6 +360,9 @@ public partial class ProxerClient
 
     [GeneratedRegex(@"<input[^>]*value=""([0-9a-f]{32})""[^>]*id=""proxerToken""|<input[^>]*id=""proxerToken""[^>]*value=""([0-9a-f]{32})""")]
     private static partial Regex ProxerTokenRegex();
+
+    [GeneratedRegex(@"href=""/user/(\d+)[^""]*""[^>]*>\s*Profil anzeigen")]
+    private static partial Regex OwnProfileRegex();
 
     [GeneratedRegex(@"class=""start_welcome"">Willkommen zur(?:ü|&uuml;)ck, (.+?)!</div>")]
     private static partial Regex WelcomeRegex();
